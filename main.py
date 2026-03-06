@@ -33,12 +33,14 @@ from scrapers.ncmec import NCMECScraper
 from scrapers.namus import NamusScraper
 from scrapers.news import NewsScraper
 from scrapers.social_media import TwitterScraper, MetaScraper
+from scrapers.gmcn import GMCNScraper
 from scrapers.international import (
     GlobalMissingKidsScraper,
     InterpolScraper, MissingPeopleUKScraper,
     ChildFocusScraper, RCMPScraper,
 )
 from utils.helpers import setup_logger
+from report import run_report
 
 console = Console()
 logger  = setup_logger("main")
@@ -51,6 +53,7 @@ SCRAPERS = {
     "namus":             NamusScraper,
     # International official
     "interpol":            InterpolScraper,
+    "gmcn":                GMCNScraper,
     "global_missing_kids": GlobalMissingKidsScraper,
     "missing_people_uk": MissingPeopleUKScraper,
     "child_focus":       ChildFocusScraper,
@@ -65,7 +68,7 @@ SCRAPERS = {
 # Logical groups
 GROUPS = {
     "official":      ["ncmec", "namus", "interpol", "missing_people_uk", "child_focus", "rcmp_canada"],
-    "international": ["interpol", "global_missing_kids", "missing_people_uk", "child_focus", "rcmp_canada"],
+    "international": ["interpol", "gmcn", "global_missing_kids", "missing_people_uk", "child_focus", "rcmp_canada"],
     "media":         ["news", "twitter"],
     "all":           list(SCRAPERS.keys()),
 }
@@ -135,7 +138,7 @@ def run_schedule():
 # Report
 # ---------------------------------------------------------------------------
 
-def print_report():
+def print_report_old():  # replaced by report.py
     engine, Session = init_db(DB_PATH)
     db = Session()
 
@@ -285,7 +288,7 @@ Groups:    official, international, media, all
     elif args.command == "schedule":
         run_schedule()
     elif args.command == "report":
-        print_report()
+        run_report()
     elif args.command == "export":
         export_csv(args.out)
     else:
