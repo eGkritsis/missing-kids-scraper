@@ -32,12 +32,10 @@ from database.models import init_db, MissingPerson, NewsArticle, ScraperRun
 from scrapers.ncmec import NCMECScraper
 from scrapers.namus import NamusScraper
 from scrapers.news import NewsScraper
-from scrapers.social_media import TwitterScraper, MetaScraper
 from scrapers.gmcn import GMCNScraper
 from scrapers.international import (
     GlobalMissingKidsScraper,
-    InterpolScraper, MissingPeopleUKScraper,
-    ChildFocusScraper, RCMPScraper,
+    InterpolScraper, MissingPeopleUKScraper, RCMPScraper,
 )
 from utils.helpers import setup_logger
 from report import run_report
@@ -56,19 +54,15 @@ SCRAPERS = {
     "gmcn":                GMCNScraper,
     "global_missing_kids": GlobalMissingKidsScraper,
     "missing_people_uk": MissingPeopleUKScraper,
-    "child_focus":       ChildFocusScraper,
     "rcmp_canada":       RCMPScraper,
     # Media
     "news":              NewsScraper,
-    # Social (needs API keys)
-    "twitter":           TwitterScraper,
-    "meta":              MetaScraper,
 }
 
 # Logical groups
 GROUPS = {
-    "official":      ["ncmec", "namus", "interpol", "missing_people_uk", "child_focus", "rcmp_canada"],
-    "international": ["interpol", "gmcn", "global_missing_kids", "missing_people_uk", "child_focus", "rcmp_canada"],
+    "official":      ["ncmec", "namus", "interpol", "missing_people_uk", "rcmp_canada"],
+    "international": ["interpol", "gmcn", "global_missing_kids", "missing_people_uk", "rcmp_canada"],
     "media":         ["news", "twitter"],
     "all":           list(SCRAPERS.keys()),
 }
@@ -265,8 +259,8 @@ def main():
         description="Missing Children Tracker — Global",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Scrapers:  ncmec, namus, interpol, missing_people_uk, child_focus, rcmp_canada, news, twitter
-Groups:    official, international, media, all
+Scrapers:  ncmec, namus, interpol, missing_people_uk, rcmp_canada, news
+Groups:    official, international, all
         """
     )
     sub = parser.add_subparsers(dest="command")

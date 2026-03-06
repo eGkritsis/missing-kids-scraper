@@ -7,7 +7,6 @@ Covered:
   - Interpol Yellow Notices API        (global)
   - Global Missing Children's Network  (global, multilingual)
   - Missing People UK                  (United Kingdom)
-  - Child Focus                        (Belgium / EU)
   - RCMP Missing Persons               (Canada)
 """
 
@@ -236,54 +235,6 @@ class MissingPeopleUKScraper(BaseScraper):
         return {"found": found, "new": new, "updated": updated, "errors": errors}
 
 
-class ChildFocusScraper(BaseScraper):
-    name = "child_focus"
-    BASE_URL   = "https://www.childfocus.be"
-    SEARCH_URL = "https://www.childfocus.be/en/missing-children"
-
-    def run(self) -> dict:
-        found = new = updated = errors = 0
-        self.logger.info("Starting Child Focus (Belgium/EU) scrape...")
-        try:
-            resp = get(self.http, self.SEARCH_URL, delay=2.0)
-            soup = BeautifulSoup(resp.text, "lxml")
-            cards = (soup.select(".missing-child") or soup.select(".child-card") or
-                     soup.select(".case-item") or soup.select("article") or
-                     soup.select(".views-row") or soup.select("[class*='missing']"))
-            self.logger.info("Child Focus: %d cards", len(cards))
-            found = len(cards)
-            for card in cards:
-                try:
-                    name_el = card.select_one("h2, h3, .name, .title, [class*='name']")
-                    link_el = card.select_one("a[href]")
-                    name    = clean_text(name_el.get_text()) if name_el else None
-                    url     = link_el["href"] if link_el else None
-                    if not name: continue
-                    if url and not url.startswith("http"):
-                        url = self.BASE_URL + url
-                    parts   = name.split()
-                    case_id = re.sub(r'[^a-zA-Z0-9]', '_', name)[:64]
-                    _, created = self.upsert(
-                        MissingPerson,
-                        lookup_kwargs={"source": self.name, "source_id": case_id},
-                        update_kwargs={"source_url": url, "full_name": name,
-                                       "first_name": parts[0] if parts else "",
-                                       "last_name": parts[-1] if len(parts) > 1 else "",
-                                       "country_last_seen": "Belgium",
-                                       "raw_data": safe_json({"name": name, "url": url})},
-                    )
-                    if created: new += 1
-                    else: updated += 1
-                except Exception as exc:
-                    self.logger.error("Child Focus card: %s", exc)
-                    errors += 1
-        except Exception as exc:
-            self.logger.error("Child Focus failed: %s", exc)
-            errors += 1
-
-        self.logger.info("Child Focus done. found=%d new=%d updated=%d errors=%d", found, new, updated, errors)
-        return {"found": found, "new": new, "updated": updated, "errors": errors}
-
 
 class RCMPScraper(BaseScraper):
     name = "rcmp_canada"
@@ -338,6 +289,5 @@ INTERNATIONAL_SCRAPERS = {
     "interpol":            InterpolScraper,
     "global_missing_kids": GlobalMissingKidsScraper,
     "missing_people_uk":   MissingPeopleUKScraper,
-    "child_focus":         ChildFocusScraper,
     "rcmp_canada":         RCMPScraper,
 }

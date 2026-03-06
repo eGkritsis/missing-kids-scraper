@@ -138,3 +138,29 @@ def safe_json(obj) -> str:
         return json.dumps(obj, default=str)
     except Exception:
         return "{}"
+
+
+def is_minor(age_at_disappearance, date_of_birth=None, date_missing=None) -> bool:
+    """
+    Returns True if the person was under 18 at time of disappearance.
+    Uses age_at_disappearance first, then calculates from DOB/date_missing if available.
+    Returns True (assume minor) if no age info is available at all.
+    """
+    from datetime import date as date_type
+
+    # Direct age field
+    if age_at_disappearance is not None:
+        try:
+            return int(age_at_disappearance) < 18
+        except (TypeError, ValueError):
+            pass
+
+    # Calculate from DOB and date missing
+    if date_of_birth is not None:
+        ref_date = date_missing if isinstance(date_missing, date_type) else date_type.today()
+        if isinstance(date_of_birth, date_type):
+            age = (ref_date - date_of_birth).days // 365
+            return age < 18
+
+    # No age info — include by default (better to include than exclude)
+    return True

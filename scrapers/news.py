@@ -367,6 +367,9 @@ class NewsScraper(BaseScraper):
             matches = self.db.query(MissingPerson).filter(
                 MissingPerson.first_name.ilike(first),
                 MissingPerson.last_name.ilike(last),
+                # Only match records confirmed to be minors or age unknown
+                (MissingPerson.age_at_disappearance < 18) |
+                (MissingPerson.age_at_disappearance == None),
             ).all()
 
             for match in matches:

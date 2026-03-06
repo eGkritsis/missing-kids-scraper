@@ -1,183 +1,172 @@
 """
 scrapers/ncmec.py
 
-NCMEC scraper using their public RSS feed.
-The old JSON servlet API (JSONDataServlet) is no longer active.
+Scraper for the National Center for Missing & Exploited Children (NCMEC).
+Public search: https://www.missingkids.org/gethelpnow/isyourchildmissing
 
-For full database access, apply for official API access at:
-https://www.missingkids.org/search  ("Request API access" link)
-
-This scraper uses:
-1. NCMEC RSS feed  - recent/new cases (no auth needed)
-2. BeautifulSoup HTML scraper against the public search page
+NCMEC publishes a public-facing search interface backed by a JSON API.
+We call the same endpoint the website uses, with polite rate-limiting.
+No authentication is required for the public search.
 """
 
-import re
-from bs4 import BeautifulSoup
-import feedparser
+import json
+from typing import Optional
 
 from database.models import MissingPerson
 from scrapers.base import BaseScraper
-from utils.helpers import clean_text, parse_date, safe_json, polite_get
+from utils.helpers import (
+    clean_text, parse_date, height_to_cm, lbs_to_kg, safe_json, polite_post
+)
 
-# Public RSS feeds NCMEC still maintains
-NCMEC_RSS_FEEDS = [
-    "https://www.missingkids.org/missingkids/servlet/XmlServlet?act=rss&missType=child&LanguageCountry=en_US",
-    "https://www.missingkids.org/rss/missingkids.rss",
-]
+NCMEC_API = "https://api.missingkids.org/missingkids/servlet/JSONDataServlet"
 
-# Public HTML search - one page at a time
-NCMEC_SEARCH_URL = "https://www.missingkids.org/gethelpnow/search/poster-results"
+# Case type codes used by NCMEC
+CASE_TYPE_MAP = {
+    "EA": "Endangered Adult",
+    "EC": "Endangered Child",
+    "FA": "Family Abduction",
+    "LO": "Lost / Injured",
+    "NA": "Non-Family Abduction",
+    "OU": "Unknown",
+    "RU": "Runaway",
+    "UU": "Unknown",
+}
 
 
 class NCMECScraper(BaseScraper):
     name = "ncmec"
 
+    # NCMEC paginates at 25 records per page
+    PAGE_SIZE = 25
+
     def run(self) -> dict:
         found = new = updated = errors = 0
-        self.logger.info("Starting NCMEC scrape (RSS + HTML)...")
+        page = 1
 
-        # --- Try RSS feeds first ---
-        for feed_url in NCMEC_RSS_FEEDS:
+        self.logger.info("Starting NCMEC scrape...")
+
+        while True:
             try:
-                import time; time.sleep(2)
-                feed = feedparser.parse(feed_url)
-                entries = feed.get("entries", [])
-                self.logger.info("RSS feed %s: %d entries", feed_url, len(entries))
-                for entry in entries:
-                    try:
-                        _, created = self._upsert_from_rss(entry)
-                        found += 1
-                        if created: new += 1
-                        else: updated += 1
-                    except Exception as e:
-                        self.logger.error("RSS entry error: %s", e)
-                        errors += 1
-            except Exception as e:
-                self.logger.warning("RSS feed failed (%s): %s", feed_url, e)
+                records = self._fetch_page(page)
+            except Exception as exc:
+                self.logger.error("Page %d fetch failed: %s", page, exc)
+                errors += 1
+                break
 
-        # --- HTML scrape fallback ---
-        try:
-            html_found, html_new, html_updated, html_errors = self._scrape_html()
-            found += html_found
-            new += html_new
-            updated += html_updated
-            errors += html_errors
-        except Exception as e:
-            self.logger.error("HTML scrape failed: %s", e)
-            errors += 1
+            if not records:
+                self.logger.info("No more records at page %d — done.", page)
+                break
 
-        # --- Suggest official API if little data ---
-        if found == 0:
-            self.logger.warning(
-                "No records retrieved. NCMEC may have changed their site. "
-                "Consider applying for official API access at: "
-                "https://www.missingkids.org/search (click 'Request API access')"
-            )
+            self.logger.info("Page %d: %d records", page, len(records))
+            found += len(records)
+
+            for raw in records:
+                try:
+                    _, created = self._upsert_record(raw)
+                    if created:
+                        new += 1
+                    else:
+                        updated += 1
+                except Exception as exc:
+                    self.logger.error("Failed to save record %s: %s", raw.get("caseNumber"), exc)
+                    errors += 1
+
+            # NCMEC returns fewer than PAGE_SIZE on the last page
+            if len(records) < self.PAGE_SIZE:
+                break
+            page += 1
 
         self.logger.info("NCMEC done. found=%d new=%d updated=%d errors=%d",
                          found, new, updated, errors)
         return {"found": found, "new": new, "updated": updated, "errors": errors}
 
-    def _upsert_from_rss(self, entry: dict) -> tuple:
-        url = entry.get("link", "")
-        title = clean_text(entry.get("title", ""))
-        summary = clean_text(entry.get("summary", ""))
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-        # Extract case number from URL if present
-        case_id = None
-        m = re.search(r'caseNum=([^&]+)', url)
-        if m:
-            case_id = m.group(1)
-        if not case_id:
-            case_id = re.sub(r'[^a-zA-Z0-9]', '_', title)[:64]
+    def _fetch_page(self, page: int) -> list[dict]:
+        """
+        Call the NCMEC JSON API for one page of results.
+        The endpoint accepts POST with form-encoded parameters.
+        """
+        params = {
+            "action": "publicSearchChild",
+            "searchLang": "en_US",
+            "missType": "child",           # child cases only
+            "rstatus": "1",                # 1 = currently missing
+            "ageTo": "17",                 # minors only (under 18)
+            "rows": str(self.PAGE_SIZE),
+            "start": str((page - 1) * self.PAGE_SIZE),
+        }
+        resp = polite_post(self.http, NCMEC_API, data=params, delay=2.0)
+        payload = resp.json()
+        return payload.get("persons", [])
 
-        # Best-effort name parse from title (e.g. "Missing: Jane Doe")
-        name_part = re.sub(r'^(Missing|Endangered|Abducted)[:\s]*', '', title, flags=re.I).strip()
-        parts = name_part.split()
-        first = parts[0] if parts else ""
-        last = parts[-1] if len(parts) > 1 else ""
+    def _upsert_record(self, raw: dict) -> tuple:
+        case_num = str(raw.get("caseNumber", "")).strip()
+        if not case_num:
+            raise ValueError("Record missing caseNumber")
+
+        # -- Parse physical details --
+        height_ft = self._safe_int(raw.get("heightFeet"))
+        height_in = self._safe_int(raw.get("heightInches"))
+        weight_lbs = self._safe_float(raw.get("weight"))
+
+        first = clean_text(raw.get("firstName") or "")
+        last = clean_text(raw.get("lastName") or "")
+        full = f"{first} {last}".strip()
+
+        photo_url = None
+        if raw.get("hasPoster"):
+            photo_url = (
+                f"https://www.missingkids.org/poster/NCMC/{case_num}/1"
+            )
+
+        case_type_code = raw.get("caseType", "UU")
+        case_type_label = CASE_TYPE_MAP.get(case_type_code, case_type_code)
 
         update_data = {
-            "source_url": url,
-            "full_name": name_part or title,
+            "source_url": f"https://www.missingkids.org/case/{case_num}",
             "first_name": first,
             "last_name": last,
-            "circumstances": summary,
-            "raw_data": safe_json(dict(entry)),
+            "full_name": full,
+            "date_of_birth": parse_date(raw.get("dateOfBirth")),
+            "age_at_disappearance": self._safe_int(raw.get("age")),
+            "gender": clean_text(raw.get("sex")),
+            "race_ethnicity": clean_text(raw.get("race")),
+            "height_cm": height_to_cm(height_ft, height_in),
+            "weight_kg": lbs_to_kg(weight_lbs),
+            "eye_color": clean_text(raw.get("eyeColor")),
+            "hair_color": clean_text(raw.get("hairColor")),
+            "date_missing": parse_date(raw.get("dateMissing")),
+            "city_last_seen": clean_text(raw.get("missingCity")),
+            "state_last_seen": clean_text(raw.get("missingState")),
+            "country_last_seen": clean_text(raw.get("missingCountry")) or "USA",
+            "circumstances": clean_text(raw.get("circumstances")),
+            "case_type": case_type_label,
+            "ncic_number": clean_text(raw.get("ncmcNumber")),
+            "photo_url": photo_url,
+            "contact_agency": clean_text(raw.get("orgName")),
+            "contact_phone": clean_text(raw.get("orgTelephone")),
+            "raw_data": safe_json(raw),
         }
 
         return self.upsert(
             MissingPerson,
-            lookup_kwargs={"source": "ncmec", "source_id": case_id},
+            lookup_kwargs={"source": "ncmec", "source_id": case_num},
             update_kwargs=update_data,
         )
 
-    def _scrape_html(self) -> tuple:
-        """
-        Scrape the public NCMEC search results page.
-        Returns (found, new, updated, errors).
-        """
-        found = new = updated = errors = 0
-
-        params = {
-            "missType": "child",
-            "action": "publicSearchChild",
-            "rstatus": "1",
-        }
-
+    @staticmethod
+    def _safe_int(value) -> Optional[int]:
         try:
-            resp = polite_get(self.http, NCMEC_SEARCH_URL, params=params, delay=2.0)
-            soup = BeautifulSoup(resp.text, "lxml")
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
-            # Each result card typically has class containing 'result' or 'poster'
-            cards = (
-                soup.select(".missing-child-result") or
-                soup.select(".poster-result") or
-                soup.select("[class*='result']") or
-                soup.select("article")
-            )
-
-            self.logger.info("HTML scrape: found %d cards", len(cards))
-
-            for card in cards:
-                try:
-                    name_el = card.select_one("h2, h3, .name, [class*='name']")
-                    link_el = card.select_one("a[href]")
-                    name = clean_text(name_el.get_text()) if name_el else None
-                    url = link_el["href"] if link_el else None
-                    if url and not url.startswith("http"):
-                        url = "https://www.missingkids.org" + url
-
-                    if not name:
-                        continue
-
-                    case_id = re.sub(r'[^a-zA-Z0-9]', '_', name)[:64]
-                    parts = name.split()
-                    first = parts[0] if parts else ""
-                    last = parts[-1] if len(parts) > 1 else ""
-
-                    _, created = self.upsert(
-                        MissingPerson,
-                        lookup_kwargs={"source": "ncmec_html", "source_id": case_id},
-                        update_kwargs={
-                            "full_name": name,
-                            "first_name": first,
-                            "last_name": last,
-                            "source_url": url,
-                            "raw_data": safe_json({"html_name": name, "url": url}),
-                        },
-                    )
-                    found += 1
-                    if created: new += 1
-                    else: updated += 1
-
-                except Exception as e:
-                    self.logger.error("Card parse error: %s", e)
-                    errors += 1
-
-        except Exception as e:
-            self.logger.warning("HTML search page error: %s", e)
-            errors += 1
-
-        return found, new, updated, errors
+    @staticmethod
+    def _safe_float(value) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

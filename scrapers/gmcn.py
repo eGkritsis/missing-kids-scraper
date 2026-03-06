@@ -18,7 +18,7 @@ from threading import Lock
 
 from database.models import MissingPerson, init_db
 from scrapers.base import BaseScraper
-from utils.helpers import clean_text, safe_json
+from utils.helpers import clean_text, safe_json, is_minor
 
 API_URL   = "https://gmcngine-api.globalmissingkids.org/api/cases/search"
 HEADERS   = {
@@ -77,6 +77,15 @@ class GMCNScraper(BaseScraper):
                             continue
 
                         update_data = _build_record(case)
+
+                        # Skip adults — filter at ingest
+                        if not is_minor(
+                            update_data.get("age_at_disappearance"),
+                            update_data.get("date_of_birth"),
+                            update_data.get("date_missing"),
+                        ):
+                            continue
+
                         inst = session.query(MissingPerson).filter_by(
                             source="gmcn", source_id=case_id
                         ).first()
