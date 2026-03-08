@@ -2,3 +2,4 @@
 *.db
 /reports
 /output
+/__pycache__
