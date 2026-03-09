@@ -1,15 +1,13 @@
 """
-main.py
-=======
-Orchestrator for the Missing Children Tracker.
+main.py — Missing Children Tracker orchestrator
 
 Usage:
-  python main.py run                        # Run all scrapers
-  python main.py run ncmec                  # Run specific scraper
-  python main.py run international          # All international scrapers
-  python main.py schedule                   # Daemon mode
-  python main.py report                     # Database summary
-  python main.py export                     # Export to CSV
+  python main.py run                    # Run all scrapers
+  python main.py run ncmec              # Run one scraper
+  python main.py run international      # Run a group
+  python main.py schedule               # Daemon mode
+  python main.py report                 # DB summary
+  python main.py export [--out PATH]    # CSV export
 """
 
 import sys
@@ -20,20 +18,19 @@ import csv
 import time
 import argparse
 import schedule
-from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
-from rich.table import Table
 from rich import print as rprint
 
-from database.models import init_db, MissingPerson, NewsArticle, ScraperRun
-from scrapers.ncmec import NCMECScraper
-from scrapers.namus import NamusScraper
-from scrapers.news import NewsScraper
-from scrapers.gmcn import GMCNScraper
+from database.models import init_db, MissingPerson
+from scrapers.ncmec           import NCMECScraper
+from scrapers.namus           import NamusScraper
+from scrapers.news            import NewsScraper
+from scrapers.gmcn            import GMCNScraper
 from scrapers.missing_people_uk import MissingPeopleUKScraper
-from scrapers.international import InterpolScraper, RCMPScraper
+from scrapers.interpol        import InterpolScraper
+from scrapers.international   import RCMPScraper
 from report import run_report
 from utils.helpers import setup_logger
 
@@ -43,22 +40,19 @@ logger  = setup_logger("main")
 DB_PATH = "missing_children.db"
 
 SCRAPERS = {
-    # US official
     "ncmec":             NCMECScraper,
     "namus":             NamusScraper,
-    # International official
     "interpol":          InterpolScraper,
     "gmcn":              GMCNScraper,
     "missing_people_uk": MissingPeopleUKScraper,
     "rcmp_canada":       RCMPScraper,
-    # Media
     "news":              NewsScraper,
 }
 
 GROUPS = {
     "us":            ["ncmec", "namus"],
-    "international": ["interpol", "gmcn", "missing_people_uk", "child_focus", "rcmp_canada"],
-    "official":      ["ncmec", "namus", "interpol", "gmcn", "missing_people_uk", "child_focus", "rcmp_canada"],
+    "international": ["interpol", "gmcn", "missing_people_uk", "rcmp_canada"],
+    "official":      ["ncmec", "namus", "interpol", "gmcn", "missing_people_uk", "rcmp_canada"],
     "media":         ["news"],
     "all":           list(SCRAPERS.keys()),
 }
@@ -79,11 +73,11 @@ def run_scrapers(names=None):
         elif name in SCRAPERS:
             targets.append(name)
         else:
-            logger.error("Unknown scraper or group: %s", name)
-            logger.error("Available scrapers: %s", ", ".join(SCRAPERS))
-            logger.error("Available groups:   %s", ", ".join(GROUPS))
+            logger.error("Unknown scraper/group: %s", name)
+            logger.error("Scrapers: %s", ", ".join(SCRAPERS))
+            logger.error("Groups:   %s", ", ".join(GROUPS))
 
-    # Deduplicate preserving order
+    # Deduplicate, preserve order
     seen = set()
     targets = [x for x in targets if not (x in seen or seen.add(x))]
 
@@ -105,20 +99,14 @@ def run_scrapers(names=None):
 # ---------------------------------------------------------------------------
 
 def run_schedule():
-    logger.info("Starting scheduled mode. Press Ctrl+C to stop.")
+    logger.info("Scheduled mode started — Ctrl+C to stop")
 
-    def job_official():
-        run_scrapers(["official"])
-
-    def job_media():
-        run_scrapers(["media"])
-
-    schedule.every(12).hours.do(job_official)
-    schedule.every(2).hours.do(job_media)
+    schedule.every(12).hours.do(lambda: run_scrapers(["official"]))
+    schedule.every(2).hours.do(lambda: run_scrapers(["media"]))
 
     # Run immediately on start
-    job_official()
-    job_media()
+    run_scrapers(["official"])
+    run_scrapers(["media"])
 
     while True:
         schedule.run_pending()
@@ -152,10 +140,10 @@ def export_csv(output_path="output/missing_children_export.csv"):
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for rec in records:
-            writer.writerow({field: getattr(rec, field, "") for field in fields})
+            writer.writerow({f: getattr(rec, f, "") for f in fields})
 
     db.close()
-    console.print(f"[green]✓ Exported {len(records):,} records to {output_path}")
+    console.print(f"[green]✓ Exported {len(records):,} records → {output_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -167,18 +155,18 @@ def main():
         description="Missing Children Tracker — Global",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Scrapers:  ncmec, namus, interpol, gmcn, missing_people_uk, child_focus, rcmp_canada, news
-Groups:    us, international, official, media, all
-        """
+Scrapers : ncmec, namus, interpol, gmcn, missing_people_uk, rcmp_canada, news
+Groups   : us, international, official, media, all
+        """,
     )
     sub = parser.add_subparsers(dest="command")
 
     run_p = sub.add_parser("run", help="Run scrapers now")
     run_p.add_argument("scrapers", nargs="*",
-                       help="Scraper names or groups (default: all)")
+                       help="Scraper names or group (default: all)")
 
-    sub.add_parser("schedule", help="Run on schedule (daemon mode)")
-    sub.add_parser("report",   help="Print detailed database report")
+    sub.add_parser("schedule", help="Run on schedule (daemon)")
+    sub.add_parser("report",   help="Print database report")
 
     exp_p = sub.add_parser("export", help="Export active cases to CSV")
     exp_p.add_argument("--out", default="output/missing_children_export.csv")

@@ -1,6 +1,0 @@
-ADD:
-
-https://www.mcsc.ca/missing-children-cases/?p=Alberta
-https://www.missingpeople.org.uk/appeal-search
-https://www.interpol.int/en/How-we-work/Notices/Yellow-Notices/View-Yellow-Notices
-https://ws-public.interpol.int/notices/v1/yellow?ageMin=0&ageMax=18&resultPerPage=160&page=1
