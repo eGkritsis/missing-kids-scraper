@@ -1,274 +1,261 @@
 """
 scrapers/missing_people_uk.py
 
-Scraper for Missing People UK (missingpeople.org.uk)
-Uses the XHR filter endpoint with age=child filter and paged= pagination.
+Async scraper for Missing People UK (missingpeople.org.uk/appeal-search)
+Uses httpx async client with 10 concurrent detail fetches.
 
-Endpoints:
-  List:   POST https://www.missingpeople.org.uk/appeal-search
-          action=mp_filter_appeals_xhr&age=child&paged=N
-  Detail: GET  https://www.missingpeople.org.uk/help-us-find/{slug}
-
-Detail page fields available:
-  - Age at disappearance
-  - Missing from (city/region)
-  - Missing since (date)
-  - Reference No
-  - Photo
+Flow:
+  1. POST XHR endpoint with age=child + paged=N  -> 20 cards per page
+  2. Concurrently fetch each detail page          -> age, city, date, photo
+  3. Skip anyone age > 17
+  4. Upsert into MissingPerson table
 """
 
+import asyncio
 import re
-import time
 from datetime import datetime
+from urllib.parse import urljoin
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
 
-from database.models import MissingPerson
+from database.models import MissingPerson, init_db
 from scrapers.base import BaseScraper
 from utils.helpers import clean_text, safe_json
 
-BASE_URL   = "https://www.missingpeople.org.uk"
-LIST_URL   = "https://www.missingpeople.org.uk/appeal-search"
-HEADERS    = {
-    "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept":          "text/html,application/xhtml+xml,*/*;q=0.8",
-    "Accept-Language": "en-GB,en;q=0.9",
-    "Referer":         "https://www.missingpeople.org.uk/appeal-search",
-}
-XHR_HEADERS = {
-    **HEADERS,
-    "Content-Type":    "application/x-www-form-urlencoded; charset=UTF-8",
+BASE           = "https://www.missingpeople.org.uk"
+SEARCH_URL     = f"{BASE}/appeal-search"
+HEADERS        = {
+    "User-Agent":       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120 Safari/537.36",
     "X-Requested-With": "XMLHttpRequest",
+    "Referer":          SEARCH_URL,
+    "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
 }
+MAX_CONCURRENT = 10
+CHILD_MAX_AGE  = 17
 
 
-def _parse_date(text: str):
-    """Parse DD/MM/YYYY date strings from the detail page."""
-    if not text:
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+
+def _extract(pattern, text):
+    m = re.search(pattern, text, re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def _parse_detail(html):
+    soup   = BeautifulSoup(html, "lxml")
+    text   = soup.get_text(" ", strip=True)
+
+    age_str       = _extract(r"Age at disappearance\s*([0-9]+)", text)
+    missing_since = _extract(r"Missing since\s*([0-9/]+)", text)
+    location      = _extract(r"Missing from\s*([A-Za-z ,\-]+?)\s*Missing since", text)
+    reference     = _extract(r"Reference No\s*([A-Za-z0-9\-]+)", text)
+
+    og    = soup.find("meta", property="og:image")
+    image = og["content"] if og and og.get("content") else None
+
+    city = county = None
+    if location and "," in location:
+        parts  = [x.strip() for x in location.split(",", 1)]
+        city, county = parts[0], parts[1]
+    elif location:
+        city = location.strip()
+
+    gender  = None
+    snippet = text[:600].lower()
+    if any(w in snippet for w in ("girl", " she ", " her ")):
+        gender = "Female"
+    elif any(w in snippet for w in ("boy", " he ", " him ", " his ")):
+        gender = "Male"
+
+    return {
+        "age":           int(age_str) if age_str else None,
+        "missing_since": missing_since,
+        "city":          city,
+        "county":        county,
+        "reference":     reference,
+        "image":         image,
+        "gender":        gender,
+    }
+
+
+def _parse_date(ds):
+    if not ds:
         return None
-    text = text.strip()
-    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
+    for fmt in ("%d/%m/%Y", "%d/%m/%y"):
         try:
-            return datetime.strptime(text, fmt).date()
+            return datetime.strptime(ds, fmt).date()
         except ValueError:
             pass
     return None
 
 
-def _parse_age(text: str):
-    """Extract integer age from strings like 'Age at disappearance44'."""
-    if not text:
-        return None
-    m = re.search(r'\d+', text)
-    return int(m.group()) if m else None
+# ---------------------------------------------------------------------------
+# Async fetch
+# ---------------------------------------------------------------------------
 
-
-def _fetch_list_page(session: requests.Session, paged: int) -> list[dict]:
-    """
-    POST the XHR endpoint with age=child and paged=N.
-    Returns list of dicts: {name, url, region, photo_url}
-    """
-    time.sleep(1.5)
-    data = {
-        "action":      "mp_filter_appeals_xhr",
-        "search_term": "",
-        "region":      "",
+async def _fetch_list_page(client, page):
+    payload = {
+        "action":       "mp_filter_appeals_xhr",
+        "search_term":  "",
+        "region":       "",
         "date_missing": "",
-        "age":         "child",
-        "gender":      "",
-        "paged":       str(paged),
+        "age":          "child",
+        "gender":       "",
+        "paged":        str(page),
     }
-    resp = session.post(LIST_URL, data=data, headers=XHR_HEADERS, timeout=30)
-    resp.raise_for_status()
+    r    = await client.post(SEARCH_URL, data=payload, timeout=30)
+    soup = BeautifulSoup(r.text, "lxml")
 
-    soup  = BeautifulSoup(resp.text, "lxml")
-    cards = soup.select(".card--person")
     results = []
-
-    for card in cards:
-        link_el  = card.select_one("a.card__link")
-        title_el = card.select_one(".card__title")
-        img_el   = card.select_one("img.card__image")
+    for card in soup.select(".card--person"):
+        name_el   = card.select_one(".card__title")
+        link_el   = card.select_one(".card__link")
         region_el = card.select_one(".post-meta__item")
+        img_el    = card.select_one("img")
 
-        url   = link_el["href"] if link_el and link_el.get("href") else None
-        name  = clean_text(title_el.get_text()) if title_el else None
-        photo = img_el["src"] if img_el and img_el.get("src") else None
-        region = clean_text(region_el.get_text()) if region_el else None
-
-        if not url or not name:
+        if not link_el or not link_el.get("href"):
             continue
 
-        if photo and not photo.startswith("http"):
-            photo = BASE_URL + photo
-
-        # Extract slug-based case ID from URL
-        # e.g. /help-us-find/adam-ming-25-502420 → adam-ming-25-502420
-        slug    = url.rstrip("/").split("/")[-1]
-        # Reference number is at end: 25-502420
-        ref_match = re.search(r'(\d{2,4}-\d{3,9})$', slug)
-        case_id   = ref_match.group(1) if ref_match else slug
+        url  = urljoin(BASE, link_el["href"])
+        slug = url.rstrip("/").split("/")[-1]
+        ref  = re.search(r"(\d{2,4}-\d{3,9})$", slug)
 
         results.append({
-            "name":     name,
-            "url":      url,
-            "region":   region,
-            "photo":    photo,
-            "case_id":  case_id,
-            "slug":     slug,
+            "name":        clean_text(name_el.get_text()) if name_el else None,
+            "url":         url,
+            "region":      clean_text(region_el.get_text()) if region_el else None,
+            "image_thumb": img_el["src"] if img_el and img_el.get("src") else None,
+            "case_id":     ref.group(1) if ref else slug,
         })
 
     return results
 
 
-def _fetch_detail(session: requests.Session, url: str) -> dict:
-    """
-    Fetch the individual appeal page and extract structured fields.
-    Returns dict with: age, city, date_missing, reference
-    """
-    time.sleep(1.2)
-    try:
-        resp = session.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception:
-        return {}
+async def _fetch_detail(client, semaphore, record):
+    async with semaphore:
+        try:
+            r       = await client.get(record["url"], timeout=30)
+            details = _parse_detail(r.text)
+            record.update(details)
+            # Drop adults that slipped past the age=child XHR filter
+            if record.get("age") is not None and record["age"] > CHILD_MAX_AGE:
+                return None
+            return record
+        except Exception:
+            return None
 
-    soup = BeautifulSoup(resp.text, "lxml")
 
-    # All detail fields live in elements whose text matches patterns like:
-    # "Age at disappearance44"
-    # "Missing fromLiverpool, Merseyside"
-    # "Missing since15/11/2024"
-    # "Reference No25-502420"
+async def _scrape_all():
+    semaphore    = asyncio.Semaphore(MAX_CONCURRENT)
+    all_children = []
 
-    result = {}
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
+        page = 1
+        while True:
+            cards = await _fetch_list_page(client, page)
+            if not cards:
+                break
 
-    # Find the details container — look for any element containing "Missing since"
-    full_text = soup.get_text(" ", strip=True)
+            results = await asyncio.gather(
+                *[_fetch_detail(client, semaphore, card) for card in cards]
+            )
+            all_children.extend(r for r in results if r is not None)
+            page += 1
+            if page > 60:
+                break
 
-    # Age at disappearance
-    m = re.search(r'Age at disappearance\s*(\d+)', full_text, re.IGNORECASE)
-    if m:
-        result["age"] = int(m.group(1))
+    return all_children
 
-    # Missing from
-    m = re.search(r'Missing from\s*(.+?)(?:Missing since|Reference|$)', full_text, re.IGNORECASE)
-    if m:
-        result["city"] = clean_text(m.group(1))
 
-    # Missing since
-    m = re.search(r'Missing since\s*(\d{1,2}/\d{1,2}/\d{2,4})', full_text, re.IGNORECASE)
-    if m:
-        result["date_missing"] = _parse_date(m.group(1))
-
-    # Reference No
-    m = re.search(r'Reference No\s*([\d\-]+)', full_text, re.IGNORECASE)
-    if m:
-        result["reference"] = m.group(1).strip()
-
-    # Gender — look for He/She/They pronoun hints or explicit label
-    m = re.search(r'\b(male|female|boy|girl|man|woman)\b', full_text[:500], re.IGNORECASE)
-    if m:
-        word = m.group(1).lower()
-        result["gender"] = "Male" if word in ("male", "boy", "man") else "Female"
-
-    # Photo — og:image is most reliable
-    og_img = soup.select_one('meta[property="og:image"]')
-    if og_img and og_img.get("content"):
-        result["photo"] = og_img["content"]
-
-    return result
-
+# ---------------------------------------------------------------------------
+# BaseScraper integration
+# ---------------------------------------------------------------------------
 
 class MissingPeopleUKScraper(BaseScraper):
     name = "missing_people_uk"
 
     def run(self) -> dict:
-        found = new = updated = skipped = errors = 0
-        paged = 1
+        self.logger.info(
+            "Starting Missing People UK async scrape (%d concurrent detail fetches)...",
+            MAX_CONCURRENT,
+        )
 
-        self.logger.info("Starting Missing People UK scrape (children only)...")
+        children = asyncio.run(_scrape_all())
+        self.logger.info("Fetched %d children from site, saving...", len(children))
 
-        while True:
-            try:
-                cards = _fetch_list_page(self.http, paged)
-            except Exception as exc:
-                self.logger.error("List page %d failed: %s", paged, exc)
-                errors += 1
-                break
+        new = updated = skipped = errors = 0
+        _, Session = init_db()
+        db = Session()
 
-            if not cards:
-                self.logger.info("No more cards at paged=%d — done.", paged)
-                break
-
-            self.logger.info("Page %d: %d cards", paged, len(cards))
-            found += len(cards)
-
-            for card in cards:
+        try:
+            for child in children:
                 try:
-                    # Fetch detail page for structured fields
-                    detail = _fetch_detail(self.http, card["url"])
+                    name    = child.get("name") or ""
+                    parts   = name.split()
+                    first   = parts[0] if parts else ""
+                    last    = parts[-1] if len(parts) > 1 else ""
+                    case_id = child.get("case_id") or child.get("reference") or ""
 
-                    age = detail.get("age") or _parse_age(card.get("name", ""))
-
-                    # Skip adults (age filter=child should handle this, but double-check)
-                    if age is not None and age >= 18:
+                    if not case_id or not name:
                         skipped += 1
                         continue
 
-                    # Parse city/state from "Liverpool, Merseyside" style
-                    city_raw = detail.get("city", "") or card.get("region", "")
-                    city_parts = [p.strip() for p in city_raw.split(",")] if city_raw else []
-                    city  = city_parts[0] if city_parts else None
-                    state = city_parts[1] if len(city_parts) > 1 else card.get("region")
-
-                    # Name split
-                    name   = card["name"]
-                    parts  = name.split()
-                    first  = parts[0] if parts else ""
-                    last   = parts[-1] if len(parts) > 1 else ""
+                    photo = child.get("image") or child.get("image_thumb")
+                    if photo and not photo.startswith("http"):
+                        photo = BASE + photo
 
                     update_data = {
-                        "source_url":           card["url"],
+                        "source_url":           child.get("url"),
                         "full_name":            name,
                         "first_name":           first,
                         "last_name":            last,
-                        "age_at_disappearance": age,
-                        "gender":               detail.get("gender"),
-                        "date_missing":         detail.get("date_missing"),
-                        "city_last_seen":       city,
-                        "state_last_seen":      state,
+                        "age_at_disappearance": child.get("age"),
+                        "gender":               child.get("gender"),
+                        "date_missing":         _parse_date(child.get("missing_since")),
+                        "city_last_seen":       child.get("city"),
+                        "state_last_seen":      child.get("county") or child.get("region"),
                         "country_last_seen":    "United Kingdom",
-                        "photo_url":            detail.get("photo") or card.get("photo"),
-                        "raw_data":             safe_json({**card, **detail}),
+                        "photo_url":            photo,
+                        "raw_data":             safe_json(child),
                     }
 
-                    _, created = self.upsert(
-                        MissingPerson,
-                        lookup_kwargs={"source": self.name, "source_id": card["case_id"]},
-                        update_kwargs=update_data,
-                    )
+                    inst = db.query(MissingPerson).filter_by(
+                        source=self.name, source_id=case_id
+                    ).first()
 
-                    if created:
+                    if inst is None:
+                        db.add(MissingPerson(
+                            source=self.name, source_id=case_id, **update_data
+                        ))
                         new += 1
-                        self.logger.info("NEW: %s (age=%s, from=%s)", name, age, city_raw)
+                        self.logger.info("NEW: %s (age=%s, %s)",
+                                         name, child.get("age"), child.get("city"))
                     else:
+                        for k, v in update_data.items():
+                            setattr(inst, k, v)
                         updated += 1
 
-                except Exception as exc:
-                    self.logger.error("Card error [%s]: %s", card.get("name", "?"), exc)
-                    errors += 1
+                    db.commit()
 
-            paged += 1
-            # Safety cap — site has ~27 pages total
-            if paged > 50:
-                break
+                except Exception as exc:
+                    db.rollback()
+                    self.logger.error("DB [%s]: %s", child.get("name", "?"), exc)
+                    errors += 1
+        finally:
+            db.close()
 
         self.logger.info(
             "Missing People UK done. found=%d new=%d updated=%d skipped=%d errors=%d",
-            found, new, updated, skipped, errors,
+            len(children), new, updated, skipped, errors,
         )
-        return {"found": found, "new": new, "updated": updated,
-                "skipped": skipped, "errors": errors}
+        return {
+            "found":   len(children),
+            "new":     new,
+            "updated": updated,
+            "skipped": skipped,
+            "errors":  errors,
+        }

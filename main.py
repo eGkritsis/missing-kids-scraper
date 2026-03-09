@@ -4,13 +4,12 @@ main.py
 Orchestrator for the Missing Children Tracker.
 
 Usage:
-  python main.py run                   # Run all scrapers once
-  python main.py run ncmec             # Run specific scraper
-  python main.py run interpol          # Interpol Yellow Notices
-  python main.py run international     # All international scrapers
-  python main.py schedule              # Daemon mode
-  python main.py report                # Database summary
-  python main.py export                # Export to CSV
+  python main.py run                        # Run all scrapers
+  python main.py run ncmec                  # Run specific scraper
+  python main.py run international          # All international scrapers
+  python main.py schedule                   # Daemon mode
+  python main.py report                     # Database summary
+  python main.py export                     # Export to CSV
 """
 
 import sys
@@ -34,13 +33,9 @@ from scrapers.namus import NamusScraper
 from scrapers.news import NewsScraper
 from scrapers.gmcn import GMCNScraper
 from scrapers.missing_people_uk import MissingPeopleUKScraper
-from scrapers.international import (
-    GlobalMissingKidsScraper,
-    InterpolScraper,
-    RCMPScraper,
-)
-from utils.helpers import setup_logger
+from scrapers.international import InterpolScraper, RCMPScraper
 from report import run_report
+from utils.helpers import setup_logger
 
 console = Console()
 logger  = setup_logger("main")
@@ -52,19 +47,18 @@ SCRAPERS = {
     "ncmec":             NCMECScraper,
     "namus":             NamusScraper,
     # International official
-    "interpol":            InterpolScraper,
-    "gmcn":                GMCNScraper,
-    "global_missing_kids": GlobalMissingKidsScraper,
+    "interpol":          InterpolScraper,
+    "gmcn":              GMCNScraper,
     "missing_people_uk": MissingPeopleUKScraper,
     "rcmp_canada":       RCMPScraper,
     # Media
     "news":              NewsScraper,
 }
 
-# Logical groups
 GROUPS = {
-    "official":      ["ncmec", "namus", "interpol", "missing_people_uk", "rcmp_canada"],
-    "international": ["interpol", "gmcn", "global_missing_kids", "missing_people_uk", "rcmp_canada"],
+    "us":            ["ncmec", "namus"],
+    "international": ["interpol", "gmcn", "missing_people_uk", "child_focus", "rcmp_canada"],
+    "official":      ["ncmec", "namus", "interpol", "gmcn", "missing_people_uk", "child_focus", "rcmp_canada"],
     "media":         ["news"],
     "all":           list(SCRAPERS.keys()),
 }
@@ -74,11 +68,10 @@ GROUPS = {
 # Core runner
 # ---------------------------------------------------------------------------
 
-def run_scrapers(names: list[str] | None = None):
+def run_scrapers(names=None):
     engine, Session = init_db(DB_PATH)
     db = Session()
 
-    # Expand group names
     targets = []
     for name in (names or ["all"]):
         if name in GROUPS:
@@ -86,10 +79,11 @@ def run_scrapers(names: list[str] | None = None):
         elif name in SCRAPERS:
             targets.append(name)
         else:
-            logger.error("Unknown scraper or group: %s (available: %s)",
-                         name, ", ".join(list(SCRAPERS) + list(GROUPS)))
+            logger.error("Unknown scraper or group: %s", name)
+            logger.error("Available scrapers: %s", ", ".join(SCRAPERS))
+            logger.error("Available groups:   %s", ", ".join(GROUPS))
 
-    # Deduplicate while preserving order
+    # Deduplicate preserving order
     seen = set()
     targets = [x for x in targets if not (x in seen or seen.add(x))]
 
@@ -107,7 +101,7 @@ def run_scrapers(names: list[str] | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Scheduled mode
+# Scheduled daemon
 # ---------------------------------------------------------------------------
 
 def run_schedule():
@@ -122,6 +116,7 @@ def run_schedule():
     schedule.every(12).hours.do(job_official)
     schedule.every(2).hours.do(job_media)
 
+    # Run immediately on start
     job_official()
     job_media()
 
@@ -131,99 +126,10 @@ def run_schedule():
 
 
 # ---------------------------------------------------------------------------
-# Report
-# ---------------------------------------------------------------------------
-
-def print_report_old():  # replaced by report.py
-    engine, Session = init_db(DB_PATH)
-    db = Session()
-
-    total    = db.query(MissingPerson).count()
-    active   = db.query(MissingPerson).filter(MissingPerson.is_resolved == False).count()
-    resolved = db.query(MissingPerson).filter(MissingPerson.is_resolved == True).count()
-    news_count = db.query(NewsArticle).count()
-
-    from sqlalchemy import func
-
-    by_source = db.query(
-        MissingPerson.source, func.count(MissingPerson.id)
-    ).group_by(MissingPerson.source).all()
-
-    by_country = db.query(
-        MissingPerson.country_last_seen, func.count(MissingPerson.id)
-    ).filter(
-        MissingPerson.country_last_seen != None,
-        MissingPerson.is_resolved == False,
-    ).group_by(MissingPerson.country_last_seen).order_by(
-        func.count(MissingPerson.id).desc()
-    ).limit(15).all()
-
-    by_state = db.query(
-        MissingPerson.state_last_seen, func.count(MissingPerson.id)
-    ).filter(
-        MissingPerson.state_last_seen != None,
-        MissingPerson.is_resolved == False,
-    ).group_by(MissingPerson.state_last_seen).order_by(
-        func.count(MissingPerson.id).desc()
-    ).limit(10).all()
-
-    recent_runs = db.query(ScraperRun).order_by(
-        ScraperRun.started_at.desc()
-    ).limit(15).all()
-
-    console.rule("[bold]Missing Children Tracker — Global Database Report")
-    rprint(f"\n[bold]Total records:[/bold]      {total}")
-    rprint(f"[bold red]Active cases:[/bold red]       {active}")
-    rprint(f"[bold green]Resolved:[/bold green]           {resolved}")
-    rprint(f"[bold]News articles:[/bold]      {news_count}\n")
-
-    t1 = Table(title="Records by Source")
-    t1.add_column("Source", style="cyan")
-    t1.add_column("Count", justify="right")
-    for src, cnt in by_source:
-        t1.add_row(src, str(cnt))
-    console.print(t1)
-
-    t2 = Table(title="Top 15 Countries (active cases)")
-    t2.add_column("Country", style="cyan")
-    t2.add_column("Cases", justify="right")
-    for country, cnt in by_country:
-        t2.add_row(country or "Unknown", str(cnt))
-    console.print(t2)
-
-    t3 = Table(title="Top 10 US States (active cases)")
-    t3.add_column("State", style="cyan")
-    t3.add_column("Cases", justify="right")
-    for state, cnt in by_state:
-        t3.add_row(state or "Unknown", str(cnt))
-    console.print(t3)
-
-    t4 = Table(title="Recent Scraper Runs")
-    t4.add_column("Scraper")
-    t4.add_column("Started")
-    t4.add_column("Status")
-    t4.add_column("New")
-    t4.add_column("Updated")
-    t4.add_column("Errors")
-    for run in recent_runs:
-        color = "green" if run.status == "success" else "red"
-        t4.add_row(
-            run.scraper_name,
-            str(run.started_at)[:16] if run.started_at else "—",
-            f"[{color}]{run.status}[/{color}]",
-            str(run.records_new),
-            str(run.records_updated),
-            str(run.errors),
-        )
-    console.print(t4)
-    db.close()
-
-
-# ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 
-def export_csv(output_path: str = "output/missing_children_export.csv"):
+def export_csv(output_path="output/missing_children_export.csv"):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     engine, Session = init_db(DB_PATH)
     db = Session()
@@ -246,10 +152,10 @@ def export_csv(output_path: str = "output/missing_children_export.csv"):
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for rec in records:
-            writer.writerow({f: getattr(rec, f, "") for f in fields})
+            writer.writerow({field: getattr(rec, field, "") for field in fields})
 
     db.close()
-    console.print(f"[green]✓ Exported {len(records)} records to {output_path}")
+    console.print(f"[green]✓ Exported {len(records):,} records to {output_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +167,8 @@ def main():
         description="Missing Children Tracker — Global",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Scrapers:  ncmec, namus, interpol, missing_people_uk, rcmp_canada, news, twitter
-Groups:    official, international, media, all
+Scrapers:  ncmec, namus, interpol, gmcn, missing_people_uk, child_focus, rcmp_canada, news
+Groups:    us, international, official, media, all
         """
     )
     sub = parser.add_subparsers(dest="command")
@@ -271,10 +177,10 @@ Groups:    official, international, media, all
     run_p.add_argument("scrapers", nargs="*",
                        help="Scraper names or groups (default: all)")
 
-    sub.add_parser("schedule", help="Run on schedule (daemon)")
-    sub.add_parser("report",   help="Print database summary")
+    sub.add_parser("schedule", help="Run on schedule (daemon mode)")
+    sub.add_parser("report",   help="Print detailed database report")
 
-    exp_p = sub.add_parser("export", help="Export to CSV")
+    exp_p = sub.add_parser("export", help="Export active cases to CSV")
     exp_p.add_argument("--out", default="output/missing_children_export.csv")
 
     args = parser.parse_args()
