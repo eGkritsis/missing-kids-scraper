@@ -3,3 +3,5 @@
 /reports
 /output
 /__pycache__
+/scrapers/__pycache__
+*.db

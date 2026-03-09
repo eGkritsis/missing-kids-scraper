@@ -33,9 +33,11 @@ from scrapers.ncmec import NCMECScraper
 from scrapers.namus import NamusScraper
 from scrapers.news import NewsScraper
 from scrapers.gmcn import GMCNScraper
+from scrapers.missing_people_uk import MissingPeopleUKScraper
 from scrapers.international import (
     GlobalMissingKidsScraper,
-    InterpolScraper, MissingPeopleUKScraper, RCMPScraper,
+    InterpolScraper,
+    RCMPScraper,
 )
 from utils.helpers import setup_logger
 from report import run_report
@@ -63,7 +65,7 @@ SCRAPERS = {
 GROUPS = {
     "official":      ["ncmec", "namus", "interpol", "missing_people_uk", "rcmp_canada"],
     "international": ["interpol", "gmcn", "global_missing_kids", "missing_people_uk", "rcmp_canada"],
-    "media":         ["news", "twitter"],
+    "media":         ["news"],
     "all":           list(SCRAPERS.keys()),
 }
 
@@ -259,8 +261,8 @@ def main():
         description="Missing Children Tracker — Global",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Scrapers:  ncmec, namus, interpol, missing_people_uk, rcmp_canada, news
-Groups:    official, international, all
+Scrapers:  ncmec, namus, interpol, missing_people_uk, rcmp_canada, news, twitter
+Groups:    official, international, media, all
         """
     )
     sub = parser.add_subparsers(dest="command")
