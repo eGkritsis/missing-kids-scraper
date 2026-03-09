@@ -1,472 +1,465 @@
-"""
-report.py
-
-Enhanced reporting module for the Missing Children Tracker.
-Run: python3 report.py
-Or:  python3 report.py --export   (also saves full report to HTML)
-"""
-
-import sys
-import os
-import argparse
-from datetime import datetime, date, timedelta
+import json
+import statistics
+from pathlib import Path
 from collections import defaultdict
+from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sqlalchemy import func
+from database.models import init_db, MissingPerson
 
-from sqlalchemy import func, case, extract, and_, or_
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.columns import Columns
-from rich.text import Text
-from rich import box
-
-from database.models import init_db, MissingPerson, NewsArticle, ScraperRun
-
-console = Console(width=120)
 DB_PATH = "missing_children.db"
 
 
-def section(title: str):
-    console.print()
-    console.rule(f"[bold yellow]{title}[/bold yellow]")
+COUNTRY_COORDS = {
+"United States":[37.0902,-95.7129],
+"Canada":[56.1304,-106.3468],
+"United Kingdom":[55.3781,-3.4360],
+"France":[46.2276,2.2137],
+"Germany":[51.1657,10.4515],
+"Spain":[40.4637,-3.7492],
+"Italy":[41.8719,12.5674],
+"Turkey":[38.9637,35.2433],
+"India":[20.5937,78.9629],
+"Pakistan":[30.3753,69.3451],
+"Nigeria":[9.0820,8.6753],
+"South Africa":[-30.5595,22.9375],
+"Australia":[-25.2744,133.7751],
+"Brazil":[-14.2350,-51.9253],
+"Mexico":[23.6345,-102.5528],
+"Argentina":[-38.4161,-63.6167],
+"Japan":[36.2048,138.2529],
+"China":[35.8617,104.1954],
+"Russia":[61.5240,105.3188]
+}
 
 
-def run_report(export_html: bool = False):
-    engine, Session = init_db(DB_PATH)
-    db = Session()
+# ------------------------------------------------
+# DATA COLLECTION
+# ------------------------------------------------
 
-    # =========================================================
-    # 1. HEADLINE STATS
-    # =========================================================
-    section("OVERVIEW")
+def collect_data(db):
 
-    total        = db.query(MissingPerson).count()
-    active       = db.query(MissingPerson).filter(MissingPerson.is_resolved == False).count()
-    resolved     = db.query(MissingPerson).filter(MissingPerson.is_resolved == True).count()
-    with_photo   = db.query(MissingPerson).filter(
-        MissingPerson.is_resolved == False,
-        MissingPerson.photo_url != None,
-        MissingPerson.photo_url != "",
+    total = db.query(MissingPerson).count()
+
+    active = db.query(MissingPerson).filter(
+        MissingPerson.is_resolved == False
     ).count()
-    news_total   = db.query(NewsArticle).count()
-    resolve_rate = f"{resolved/total*100:.1f}%" if total else "0%"
 
-    # New in last 7 / 30 days
-    seven_days_ago  = datetime.utcnow() - timedelta(days=7)
-    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    new_7d  = db.query(MissingPerson).filter(MissingPerson.created_at >= seven_days_ago).count()
-    new_30d = db.query(MissingPerson).filter(MissingPerson.created_at >= thirty_days_ago).count()
+    resolved = db.query(MissingPerson).filter(
+        MissingPerson.is_resolved == True
+    ).count()
 
-    panels = [
-        Panel(f"[bold white]{total:,}[/bold white]\n[dim]Total Records[/dim]",         style="blue"),
-        Panel(f"[bold red]{active:,}[/bold red]\n[dim]Active Cases[/dim]",              style="red"),
-        Panel(f"[bold green]{resolved:,}[/bold green]\n[dim]Resolved[/dim]",            style="green"),
-        Panel(f"[bold cyan]{resolve_rate}[/bold cyan]\n[dim]Resolution Rate[/dim]",     style="cyan"),
-        Panel(f"[bold magenta]{with_photo:,}[/bold magenta]\n[dim]Have Photos[/dim]",   style="magenta"),
-        Panel(f"[bold yellow]{news_total:,}[/bold yellow]\n[dim]News Articles[/dim]",   style="yellow"),
-        Panel(f"[bold white]{new_7d:,}[/bold white]\n[dim]New (7 days)[/dim]",          style="blue"),
-        Panel(f"[bold white]{new_30d:,}[/bold white]\n[dim]New (30 days)[/dim]",        style="blue"),
-    ]
-    console.print(Columns(panels, equal=True))
-
-    # =========================================================
-    # 2. RECORDS BY SOURCE
-    # =========================================================
-    section("RECORDS BY SOURCE")
-
-    by_source = db.query(
-        MissingPerson.source,
-        func.count(MissingPerson.id).label("total"),
-        func.sum(case((MissingPerson.is_resolved == False, 1), else_=0)).label("active"),
-        func.sum(case((MissingPerson.is_resolved == True,  1), else_=0)).label("resolved"),
-        func.sum(case((and_(MissingPerson.is_resolved == False,
-                            MissingPerson.photo_url != None,
-                            MissingPerson.photo_url != ""), 1), else_=0)).label("photos"),
-    ).group_by(MissingPerson.source).order_by(func.count(MissingPerson.id).desc()).all()
-
-    t = Table(box=box.ROUNDED, show_footer=False)
-    t.add_column("Source",          style="cyan",    min_width=20)
-    t.add_column("Total",           justify="right", style="white")
-    t.add_column("Active",          justify="right", style="red")
-    t.add_column("Resolved",        justify="right", style="green")
-    t.add_column("With Photo",      justify="right", style="magenta")
-    t.add_column("Resolve Rate",    justify="right", style="yellow")
-
-    for row in by_source:
-        rate = f"{int(row.resolved)/int(row.total)*100:.1f}%" if row.total else "0%"
-        t.add_row(
-            row.source,
-            f"{int(row.total):,}",
-            f"{int(row.active):,}",
-            f"{int(row.resolved):,}",
-            f"{int(row.photos):,}",
-            rate,
-        )
-    console.print(t)
-
-    # =========================================================
-    # 3. TOP COUNTRIES
-    # =========================================================
-    section("TOP 20 COUNTRIES (Active Cases)")
-
-    by_country = db.query(
+    countries_raw = db.query(
         MissingPerson.country_last_seen,
-        func.count(MissingPerson.id).label("cnt"),
-    ).filter(
-        MissingPerson.is_resolved == False,
-        MissingPerson.country_last_seen != None,
-        MissingPerson.country_last_seen != "",
-    ).group_by(MissingPerson.country_last_seen).order_by(func.count(MissingPerson.id).desc()).limit(20).all()
-
-    t = Table(box=box.ROUNDED)
-    t.add_column("Rank", justify="right", style="dim", width=5)
-    t.add_column("Country",          style="cyan",  min_width=25)
-    t.add_column("Active Cases",     justify="right", style="red")
-    t.add_column("Bar",              style="red",   min_width=30)
-
-    max_cnt = by_country[0].cnt if by_country else 1
-    for i, row in enumerate(by_country, 1):
-        bar_len  = int((row.cnt / max_cnt) * 30)
-        bar      = "█" * bar_len
-        t.add_row(str(i), row.country_last_seen or "Unknown", f"{row.cnt:,}", bar)
-    console.print(t)
-
-    # =========================================================
-    # 4. TOP US STATES
-    # =========================================================
-    section("TOP 15 US STATES (Active Cases)")
-
-    by_state = db.query(
-        MissingPerson.state_last_seen,
-        func.count(MissingPerson.id).label("cnt"),
-    ).filter(
-        MissingPerson.is_resolved == False,
-        MissingPerson.country_last_seen.in_(["USA", "United States", "US"]),
-        MissingPerson.state_last_seen != None,
-        MissingPerson.state_last_seen != "",
-    ).group_by(MissingPerson.state_last_seen).order_by(func.count(MissingPerson.id).desc()).limit(15).all()
-
-    t = Table(box=box.ROUNDED)
-    t.add_column("Rank",         justify="right", style="dim", width=5)
-    t.add_column("State",        style="cyan",    min_width=20)
-    t.add_column("Active Cases", justify="right", style="red")
-    t.add_column("Bar",          style="red",     min_width=30)
-
-    max_cnt = by_state[0].cnt if by_state else 1
-    for i, row in enumerate(by_state, 1):
-        bar_len = int((row.cnt / max_cnt) * 30)
-        t.add_row(str(i), row.state_last_seen or "Unknown", f"{row.cnt:,}", "█" * bar_len)
-    console.print(t)
-
-    # =========================================================
-    # 5. GENDER BREAKDOWN
-    # =========================================================
-    section("GENDER BREAKDOWN (Active Cases)")
-
-    by_gender = db.query(
-        MissingPerson.gender,
-        func.count(MissingPerson.id).label("cnt"),
-    ).filter(MissingPerson.is_resolved == False).group_by(MissingPerson.gender).order_by(
-        func.count(MissingPerson.id).desc()
+        func.count(MissingPerson.id)
+    ).group_by(
+        MissingPerson.country_last_seen
     ).all()
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Gender",       style="cyan",    min_width=15)
-    t.add_column("Count",        justify="right", style="white")
-    t.add_column("% of Active",  justify="right", style="yellow")
+    sources_raw = db.query(
+        MissingPerson.source,
+        func.count(MissingPerson.id)
+    ).group_by(
+        MissingPerson.source
+    ).all()
 
-    for row in by_gender:
-        pct = f"{row.cnt/active*100:.1f}%" if active else "0%"
-        t.add_row(row.gender or "Unknown", f"{row.cnt:,}", pct)
-    console.print(t)
+    gender_raw = db.query(
+        MissingPerson.gender,
+        func.count(MissingPerson.id)
+    ).group_by(
+        MissingPerson.gender
+    ).all()
 
-    # =========================================================
-    # 6. AGE DISTRIBUTION
-    # =========================================================
-    section("AGE AT DISAPPEARANCE (Active Cases)")
+    cases = db.query(MissingPerson).all()
 
-    age_buckets = {
-        "0–5":   (0, 5),
-        "6–10":  (6, 10),
-        "11–13": (11, 13),
-        "14–15": (14, 15),
-        "16–17": (16, 17),
-        "18+":   (18, 999),
-        "Unknown": (None, None),
+    age_groups = defaultdict(int)
+    yearly = defaultdict(int)
+    monthly = defaultdict(int)
+    duration_groups = defaultdict(int)
+
+    ages = []
+
+    now = datetime.utcnow().date()
+
+    photo_count = 0
+    age_count = 0
+    gender_count = 0
+    date_count = 0
+
+    for c in cases:
+
+        if c.photo_url:
+            photo_count += 1
+
+        if c.age_at_disappearance:
+            ages.append(c.age_at_disappearance)
+            age_count += 1
+
+        if c.gender:
+            gender_count += 1
+
+        if c.date_missing:
+            date_count += 1
+
+        if c.age_at_disappearance:
+
+            a = c.age_at_disappearance
+
+            if a <=5:
+                age_groups["0-5"]+=1
+            elif a<=10:
+                age_groups["6-10"]+=1
+            elif a<=13:
+                age_groups["11-13"]+=1
+            elif a<=15:
+                age_groups["14-15"]+=1
+            elif a<=17:
+                age_groups["16-17"]+=1
+
+        if c.date_missing:
+
+            y = str(c.date_missing.year)
+            m = f"{c.date_missing.year}-{c.date_missing.month:02d}"
+
+            yearly[y]+=1
+            monthly[m]+=1
+
+            days = (now - c.date_missing).days
+
+            if days < 30:
+                duration_groups["<1 month"]+=1
+            elif days < 180:
+                duration_groups["1-6 months"]+=1
+            elif days < 365:
+                duration_groups["6-12 months"]+=1
+            elif days < 1095:
+                duration_groups["1-3 years"]+=1
+            else:
+                duration_groups["3+ years"]+=1
+
+
+    age_stats = {}
+
+    if ages:
+        age_stats = {
+            "mean": round(statistics.mean(ages),1),
+            "median": statistics.median(ages),
+            "min": min(ages),
+            "max": max(ages)
+        }
+
+
+    return {
+
+        "summary":{
+            "total":total,
+            "active":active,
+            "resolved":resolved,
+            "resolution_rate": round(resolved/total*100,2) if total else 0
+        },
+
+        "countries":[
+            {"country":c or "Unknown","count":n}
+            for c,n in countries_raw
+        ],
+
+        "sources":[
+            {"source":s or "Unknown","count":n}
+            for s,n in sources_raw
+        ],
+
+        "gender":[
+            {"gender":g or "Unknown","count":n}
+            for g,n in gender_raw
+        ],
+
+        "ages":age_groups,
+        "years":yearly,
+        "months":monthly,
+        "durations":duration_groups,
+        "age_stats":age_stats,
+
+        "cases":[
+            {
+                "name":c.full_name,
+                "age":c.age_at_disappearance,
+                "gender":c.gender,
+                "country":c.country_last_seen,
+                "date":str(c.date_missing),
+                "source":c.source,
+                "photo":c.photo_url
+            }
+            for c in cases
+        ]
+
     }
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Age Group",    style="cyan",    min_width=12)
-    t.add_column("Count",        justify="right", style="white")
-    t.add_column("% of Active",  justify="right", style="yellow")
-    t.add_column("Bar",          style="blue",    min_width=25)
 
-    bucket_counts = {}
-    for label, (lo, hi) in age_buckets.items():
-        if lo is None:
-            cnt = db.query(MissingPerson).filter(
-                MissingPerson.is_resolved == False,
-                MissingPerson.age_at_disappearance == None,
-            ).count()
-        else:
-            cnt = db.query(MissingPerson).filter(
-                MissingPerson.is_resolved == False,
-                MissingPerson.age_at_disappearance >= lo,
-                MissingPerson.age_at_disappearance <= hi,
-            ).count()
-        bucket_counts[label] = cnt
+# ------------------------------------------------
+# HTML DASHBOARD
+# ------------------------------------------------
 
-    max_cnt = max(bucket_counts.values()) or 1
-    for label, cnt in bucket_counts.items():
-        pct     = f"{cnt/active*100:.1f}%" if active else "0%"
-        bar_len = int((cnt / max_cnt) * 25)
-        t.add_row(label, f"{cnt:,}", pct, "█" * bar_len)
-    console.print(t)
+def build_html(data):
 
-    # =========================================================
-    # 7. CASE TYPE BREAKDOWN
-    # =========================================================
-    section("CASE TYPE BREAKDOWN (Active Cases)")
+    return f"""
+<!DOCTYPE html>
+<html>
 
-    by_type = db.query(
-        MissingPerson.case_type,
-        func.count(MissingPerson.id).label("cnt"),
-    ).filter(
-        MissingPerson.is_resolved == False,
-        MissingPerson.case_type != None,
-        MissingPerson.case_type != "",
-    ).group_by(MissingPerson.case_type).order_by(func.count(MissingPerson.id).desc()).limit(15).all()
+<head>
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Case Type",    style="cyan",    min_width=30)
-    t.add_column("Count",        justify="right", style="white")
-    t.add_column("% of Active",  justify="right", style="yellow")
+<meta charset="utf-8">
 
-    for row in by_type:
-        pct = f"{row.cnt/active*100:.1f}%" if active else "0%"
-        t.add_row(row.case_type or "Unknown", f"{row.cnt:,}", pct)
-    console.print(t)
+<title>Missing Children Dashboard</title>
 
-    # =========================================================
-    # 8. MISSING BY YEAR
-    # =========================================================
-    section("CASES BY YEAR OF DISAPPEARANCE (last 10 years, active only)")
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
-    current_year = datetime.utcnow().year
-    t = Table(box=box.ROUNDED)
-    t.add_column("Year",         style="cyan",  width=8)
-    t.add_column("Cases",        justify="right", style="white")
-    t.add_column("Bar",          style="yellow", min_width=35)
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-    year_data = []
-    for yr in range(current_year, current_year - 11, -1):
-        cnt = db.query(MissingPerson).filter(
-            MissingPerson.is_resolved == False,
-            extract("year", MissingPerson.date_missing) == yr,
-        ).count()
-        year_data.append((yr, cnt))
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-    max_cnt = max(c for _, c in year_data) or 1
-    for yr, cnt in year_data:
-        bar_len = int((cnt / max_cnt) * 35)
-        t.add_row(str(yr), f"{cnt:,}", "█" * bar_len)
-    console.print(t)
+<style>
 
-    # =========================================================
-    # 9. RECENTLY RESOLVED CASES
-    # =========================================================
-    section("RECENTLY RESOLVED CASES (last 20)")
+body {{
+background:#0f172a;
+color:white;
+font-family:Arial;
+margin:0;
+}}
 
-    recent_resolved = db.query(MissingPerson).filter(
-        MissingPerson.is_resolved == True,
-        MissingPerson.resolution_notes != None,
-    ).order_by(MissingPerson.updated_at.desc()).limit(20).all()
+header {{
+padding:20px;
+font-size:28px;
+font-weight:bold;
+}}
 
-    if recent_resolved:
-        t = Table(box=box.ROUNDED)
-        t.add_column("Name",         style="green",  min_width=25)
-        t.add_column("Source",       style="cyan",   width=12)
-        t.add_column("Country",      style="white",  width=15)
-        t.add_column("Resolution",   style="dim",    min_width=40)
+.stats {{
+display:flex;
+gap:20px;
+padding:20px;
+}}
 
-        for r in recent_resolved:
-            notes = (r.resolution_notes or "")[:80] + "..." if len(r.resolution_notes or "") > 80 else (r.resolution_notes or "")
-            t.add_row(
-                r.full_name or "Unknown",
-                r.source,
-                r.country_last_seen or "",
-                notes,
-            )
-        console.print(t)
-    else:
-        console.print("[dim]No resolved cases with notes yet.[/dim]")
+.stat {{
+background:#1e293b;
+padding:15px;
+border-radius:10px;
+flex:1;
+text-align:center;
+}}
 
-    # =========================================================
-    # 10. MOST RECENT MISSING CHILDREN
-    # =========================================================
-    section("10 MOST RECENTLY REPORTED MISSING")
+#map {{
+height:450px;
+margin:20px;
+border-radius:10px;
+}}
 
-    recent_missing = db.query(MissingPerson).filter(
-        MissingPerson.is_resolved == False,
-        MissingPerson.date_missing != None,
-    ).order_by(MissingPerson.date_missing.desc()).limit(10).all()
+.grid {{
+display:grid;
+grid-template-columns:repeat(3,1fr);
+gap:20px;
+padding:20px;
+}}
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Name",         style="red",    min_width=25)
-    t.add_column("Missing Since",style="white",  width=14)
-    t.add_column("Age",          justify="right", width=5)
-    t.add_column("Country",      style="cyan",   width=15)
-    t.add_column("State/City",   style="white",  width=20)
-    t.add_column("Type",         style="yellow", width=20)
-    t.add_column("Source",       style="dim",    width=10)
+.chartBox {{
+background:#1e293b;
+padding:10px;
+border-radius:10px;
+}}
 
-    for r in recent_missing:
-        location = ", ".join(filter(None, [r.city_last_seen, r.state_last_seen]))
-        t.add_row(
-            r.full_name or "Unknown",
-            str(r.date_missing) if r.date_missing else "",
-            str(r.age_at_disappearance or ""),
-            r.country_last_seen or "",
-            location,
-            r.case_type or "",
-            r.source,
-        )
-    console.print(t)
+table {{
+width:100%;
+border-collapse:collapse;
+}}
 
-    # =========================================================
-    # 11. NEWS CROSS-REFERENCE MATCHES
-    # =========================================================
-    section("NEWS ARTICLES WITH DB MATCHES")
+td,th {{
+padding:8px;
+border-bottom:1px solid #333;
+}}
 
-    matched_articles = db.query(NewsArticle).filter(
-        NewsArticle.names_mentioned != None,
-        NewsArticle.names_mentioned != "",
-    ).order_by(NewsArticle.published_at.desc()).limit(15).all()
+.countryMarker {{
+text-align:center;
+color:white;
+font-weight:bold;
+}}
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Published",    style="dim",    width=12)
-    t.add_column("Source",       style="cyan",   width=20)
-    t.add_column("Title",        style="white",  min_width=40)
-    t.add_column("Names Found",  style="yellow", min_width=20)
+.countryMarker .badge {{
+background:#ef4444;
+border-radius:20px;
+padding:6px 10px;
+display:inline-block;
+font-size:14px;
+margin-bottom:3px;
+box-shadow:0 2px 6px rgba(0,0,0,0.6);
+}}
 
-    for a in matched_articles:
-        pub  = str(a.published_at)[:10] if a.published_at else ""
-        name = (a.names_mentioned or "")[:50]
-        title = (a.title or "")[:60] + ("..." if len(a.title or "") > 60 else "")
-        t.add_row(pub, a.source_name or "", title, name)
-    console.print(t)
+.countryMarker span{{
+font-size:11px;
+}}
 
-    # =========================================================
-    # 12. SCRAPER HEALTH
-    # =========================================================
-    section("SCRAPER RUN HISTORY")
+</style>
 
-    # Last run per scraper
-    subq = db.query(
-        ScraperRun.scraper_name,
-        func.max(ScraperRun.started_at).label("last_run"),
-    ).group_by(ScraperRun.scraper_name).subquery()
+</head>
 
-    recent_runs = db.query(ScraperRun).join(
-        subq,
-        and_(
-            ScraperRun.scraper_name == subq.c.scraper_name,
-            ScraperRun.started_at   == subq.c.last_run,
-        )
-    ).order_by(ScraperRun.records_new.desc()).all()
+<body>
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Scraper",      style="cyan",   min_width=20)
-    t.add_column("Last Run",     style="white",  width=17)
-    t.add_column("Status",       width=10)
-    t.add_column("Found",        justify="right", style="white",  width=7)
-    t.add_column("New",          justify="right", style="green",  width=7)
-    t.add_column("Updated",      justify="right", style="yellow", width=8)
-    t.add_column("Errors",       justify="right", style="red",    width=7)
-    t.add_column("Duration",     justify="right", style="dim",    width=10)
+<header>🌍 Missing Children Intelligence Dashboard</header>
 
-    for run in recent_runs:
-        color    = "green" if run.status == "success" else ("yellow" if run.status == "partial" else "red")
-        duration = ""
-        if run.started_at and run.finished_at:
-            secs = int((run.finished_at - run.started_at).total_seconds())
-            duration = f"{secs//60}m {secs%60}s" if secs >= 60 else f"{secs}s"
-        t.add_row(
-            run.scraper_name,
-            str(run.started_at)[:16] if run.started_at else "—",
-            f"[{color}]{run.status or '?'}[/{color}]",
-            str(run.records_found or 0),
-            str(run.records_new or 0),
-            str(run.records_updated or 0),
-            str(run.errors or 0),
-            duration,
-        )
-    console.print(t)
+<div class="stats">
 
-    # All-time totals
-    all_runs = db.query(ScraperRun).all()
-    total_runs      = len(all_runs)
-    total_errors    = sum(r.errors or 0 for r in all_runs)
-    total_new_ever  = sum(r.records_new or 0 for r in all_runs)
-    console.print(f"\n[dim]Total scraper runs: {total_runs} | "
-                  f"Total new records ever ingested: {total_new_ever:,} | "
-                  f"Total errors ever: {total_errors}[/dim]")
+<div class="stat">
+<h2>{data["summary"]["total"]}</h2>Total
+</div>
 
-    # =========================================================
-    # 13. DATA QUALITY
-    # =========================================================
-    section("DATA QUALITY (Active Cases)")
+<div class="stat">
+<h2>{data["summary"]["active"]}</h2>Active
+</div>
 
-    fields = [
-        ("Full Name",        MissingPerson.full_name),
-        ("Date of Birth",    MissingPerson.date_of_birth),
-        ("Date Missing",     MissingPerson.date_missing),
-        ("Age",              MissingPerson.age_at_disappearance),
-        ("Gender",           MissingPerson.gender),
-        ("Country",          MissingPerson.country_last_seen),
-        ("State",            MissingPerson.state_last_seen),
-        ("City",             MissingPerson.city_last_seen),
-        ("Photo",            MissingPerson.photo_url),
-        ("Case Type",        MissingPerson.case_type),
-        ("Circumstances",    MissingPerson.circumstances),
-        ("Contact Agency",   MissingPerson.contact_agency),
-    ]
+<div class="stat">
+<h2>{data["summary"]["resolved"]}</h2>Resolved
+</div>
 
-    t = Table(box=box.ROUNDED)
-    t.add_column("Field",            style="cyan",    min_width=18)
-    t.add_column("Populated",        justify="right", style="white")
-    t.add_column("Missing",          justify="right", style="red")
-    t.add_column("Coverage",         justify="right", style="yellow")
-    t.add_column("Bar",              style="green",   min_width=25)
+<div class="stat">
+<h2>{data["summary"]["resolution_rate"]}%</h2>Resolution Rate
+</div>
 
-    for label, col in fields:
-        populated = db.query(MissingPerson).filter(
-            MissingPerson.is_resolved == False,
-            col != None,
-            col != "",
-        ).count()
-        missing_cnt = active - populated
-        pct         = populated / active * 100 if active else 0
-        bar_len     = int(pct / 4)
-        t.add_row(
-            label,
-            f"{populated:,}",
-            f"{missing_cnt:,}",
-            f"{pct:.1f}%",
-            "█" * bar_len,
-        )
-    console.print(t)
+</div>
 
-    console.print(f"\n[dim]Report generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC[/dim]")
-    console.print()
+<div id="map"></div>
 
-    db.close()
+<div class="grid">
+
+<div class="chartBox"><canvas id="sources"></canvas></div>
+<div class="chartBox"><canvas id="gender"></canvas></div>
+<div class="chartBox"><canvas id="ages"></canvas></div>
+<div class="chartBox"><canvas id="years"></canvas></div>
+<div class="chartBox"><canvas id="months"></canvas></div>
+<div class="chartBox"><canvas id="durations"></canvas></div>
+
+</div>
+
+<script>
+
+const DATA = {json.dumps(data)}
+const COUNTRY_COORDS = {json.dumps(COUNTRY_COORDS)}
+
+var map = L.map("map").setView([20,0],2)
+
+L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map)
+
+let markers = L.layerGroup().addTo(map)
+
+function updateMap(){{
+
+markers.clearLayers()
+
+DATA.countries.forEach(c=>{{
+
+let coords = COUNTRY_COORDS[c.country]
+
+if(!coords) return
+
+let count = c.count
+
+let icon = L.divIcon({{
+className: "countryMarker",
+html: `<div class="badge">${{count}}</div><span>${{c.country}}</span>`,
+iconSize:[60,40]
+}})
+
+let m = L.marker(coords,{{icon}})
+.bindPopup(`<b>${{c.country}}</b><br>${{count}} cases`)
+
+markers.addLayer(m)
+
+}})
+
+}}
+
+updateMap()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Missing Children Tracker — Detailed Report")
-    parser.add_argument("--export", action="store_true", help="Also export report to HTML")
-    args = parser.parse_args()
-    run_report(export_html=args.export)
+function makeChart(id,type,labels,data,label){{
+
+new Chart(document.getElementById(id),{{
+type:type,
+data:{{labels:labels,datasets:[{{label:label,data:data}}]}}
+}})
+
+}}
+
+makeChart(
+"sources",
+"bar",
+DATA.sources.map(x=>x.source),
+DATA.sources.map(x=>x.count),
+"Cases by Source"
+)
+
+makeChart(
+"gender",
+"pie",
+DATA.gender.map(x=>x.gender),
+DATA.gender.map(x=>x.count),
+"Gender"
+)
+
+makeChart(
+"ages",
+"bar",
+Object.keys(DATA.ages),
+Object.values(DATA.ages),
+"Age Distribution"
+)
+
+makeChart(
+"years",
+"line",
+Object.keys(DATA.years),
+Object.values(DATA.years),
+"Cases per Year"
+)
+
+makeChart(
+"months",
+"line",
+Object.keys(DATA.months),
+Object.values(DATA.months),
+"Cases per Month"
+)
+
+makeChart(
+"durations",
+"bar",
+Object.keys(DATA.durations),
+Object.values(DATA.durations),
+"Missing Duration"
+)
+
+</script>
+
+</body>
+</html>
+"""
+
+
+# ------------------------------------------------
+# RUN REPORT
+# ------------------------------------------------
+
+def run_report():
+
+    engine,Session = init_db(DB_PATH)
+    db = Session()
+
+    data = collect_data(db)
+
+    html = build_html(data)
+
+    Path("output").mkdir(exist_ok=True)
+
+    out="output/dashboard.html"
+
+    with open(out,"w",encoding="utf-8") as f:
+        f.write(html)
+
+    print("Dashboard generated:",out)
