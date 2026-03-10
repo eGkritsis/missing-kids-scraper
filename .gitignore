@@ -5,3 +5,5 @@
 /__pycache__
 /scrapers/__pycache__
 *.db
+/analysis/__pycache__
+/analysis/output
