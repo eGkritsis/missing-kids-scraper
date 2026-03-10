@@ -7,3 +7,4 @@
 *.db
 /analysis/__pycache__
 /analysis/output
+missing_children.db

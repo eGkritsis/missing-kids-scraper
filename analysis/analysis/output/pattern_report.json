@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-03-10T22:37:53.459934",
+  "db_path": "missing_children.db",
+  "total_cases": 0,
+  "summary": {
+    "surname_cluster_count": 0,
+    "sibling_units": 0,
+    "family_groups": 0,
+    "cross_border_clusters": 0,
+    "spatiotemporal_bursts": 0,
+    "active_bursts": 0,
+    "active_corridors": 0,
+    "flagged_countries": 0,
+    "timeline_spikes": 0,
+    "active_spikes": 0
+  },
+  "surname_clusters": [],
+  "spatiotemporal": [],
+  "corridors": {
+    "corridor_hits": [],
+    "flow_matrix": []
+  },
+  "targeting": [],
+  "timeline": {
+    "spikes": [],
+    "monthly_overall": {},
+    "monthly_by_country": {}
+  }
+}

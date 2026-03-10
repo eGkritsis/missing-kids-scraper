@@ -1,0 +1,22 @@
+========================================================================
+  MISSING CHILDREN — PATTERN ANALYSIS REPORT
+  Generated : 2026-03-10 22:37:53
+  Database  : missing_children.db
+  Parameters: min_cluster=2  date_window=180d
+========================================================================
+
+1. SURNAME CLUSTERS  (0 total | 0 sibling-units | 0 family-groups | 0 cross-border)
+------------------------------------------------------------------------
+2. SPATIO-TEMPORAL BURSTS  (0 total | 0 ACTIVE last 90d)
+------------------------------------------------------------------------
+3. TRAFFICKING CORRIDORS  (0 active)
+------------------------------------------------------------------------
+  FLOW MATRIX (top origin→destination pairs):
+
+4. DEMOGRAPHIC FLAGS  (0 countries flagged)
+------------------------------------------------------------------------
+5. TIMELINE ANOMALIES  (0 spikes | 0 recent)
+------------------------------------------------------------------------
+
+========================================================================
+END OF REPORT
