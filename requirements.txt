@@ -8,3 +8,5 @@ rich>=13.0.0
 fake-useragent>=1.4.0
 SQLAlchemy>=2.0.0
 tenacity>=8.2.0
+scikit-learn
+rapidfuzz
