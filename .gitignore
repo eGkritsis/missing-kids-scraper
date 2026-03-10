@@ -9,3 +9,5 @@
 /analysis/output
 missing_children.db
 /export
+missing_children.db
+*.txt
