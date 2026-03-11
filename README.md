@@ -104,7 +104,7 @@ Interpol Yellow Notices are fetched via the public `ws-public.interpol.int` API 
 
 ### Overview — KPIs & World Map
 
-13,933 total cases. 47 active burst clusters. 1 active trafficking corridor. 20 countries with demographic flags. The map supports three modes: **Cases Count**, **Active Bursts**, and **Corridors**.
+7,101 total cases. 42 active burst clusters. 1 active trafficking corridor. 21 countries with demographic flags. The map supports three modes: **Cases Count**, **Active Bursts**, and **Corridors**.
 
 ![Dashboard overview — KPIs and world map](screenshots/dashboard1.png)
 
@@ -133,6 +133,9 @@ Filterable table with photo thumbnails, name, age, gender, city, country, date m
 ### Pattern Analysis — Timeline Anomalies & Demographic Targeting
 
 Statistical spike detection (z-score) per country per month highlights organised activity. Demographic targeting flags countries with abnormal age/gender distributions — Guatemala shows `PREDOMINANTLY_FEMALE + HIGH_PROPORTION_YOUNG_CHILDREN + VERY_YOUNG_MEAN_AGE (8.8)`, consistent with documented trafficking profiles.
+
+![Trafficking corridors](screenshots/patterns.png)
+
 
 ---
 
