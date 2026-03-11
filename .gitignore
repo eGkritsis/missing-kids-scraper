@@ -13,3 +13,6 @@ missing_children.db
 *.txt
 /alerts/__pycache__
 /__pycache__
+alerts/pending.json
+*.json
+*.db
