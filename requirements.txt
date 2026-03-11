@@ -10,3 +10,7 @@ SQLAlchemy>=2.0.0
 tenacity>=8.2.0
 scikit-learn
 rapidfuzz
+reportlab 
+Pillow 
+pdfplumber
+spacy
