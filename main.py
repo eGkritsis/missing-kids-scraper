@@ -454,20 +454,33 @@ def cmd_pipeline(args):
 
     steps = []
     if not skip_scrape:
-        steps.append(("Scraping all sources",    lambda: cmd_run(type("A",(),{"scrapers":["all"]})())))
-    steps.append(("Pattern analysis",             lambda: cmd_patterns(args)))
-    steps.append(("OSINT enrichment (limit 500)", lambda: cmd_enrich(
-        type("A",(),{"db": DB_PATH, "limit": 500, "source": None, "case_id": None})()
-    )))
-    steps.append(("Network graph",                lambda: cmd_network(args)))
-    steps.append(("Alert monitor (single pass)",  lambda: cmd_monitor(
-        type("A",(),{"db": DB_PATH, "watch": False, "test": False, "interval": 30})()
-    )))
-    steps.append(("HTML dashboard",               lambda: cmd_report(args)))
-    steps.append(("CSV export",                   lambda: cmd_export(
-        type("A",(),{"db": DB_PATH, "format": "csv", "clusters_only": False,
-                     "since": None, "out": "export/output"})()
-    )))
+        steps.append(("Scraping all sources",
+                       lambda: cmd_run(type("A",(),{"scrapers":["all"]})())))
+        steps.append(("Cleanup adults from DB",
+                       lambda: cmd_cleanup(type("A",(),{"yes":True})())))
+    steps.append(("Pattern analysis",
+                   lambda: cmd_patterns(args)))
+    steps.append(("OSINT enrichment (limit 500)",
+                   lambda: cmd_enrich(type("A",(),{
+                       "db": DB_PATH, "limit": 500,
+                       "source": None, "case_id": None,
+                   })())))
+    steps.append(("Network graph",
+                   lambda: cmd_network(args)))
+    steps.append(("Alert monitor (single pass)",
+                   lambda: cmd_monitor(type("A",(),{
+                       "db": DB_PATH, "watch": False,
+                       "test": False, "interval": 30,
+                   })())))
+    steps.append(("HTML dashboard",
+                   lambda: cmd_report(args)))
+    steps.append(("CSV export",
+                   lambda: cmd_export(type("A",(),{
+                       "db": DB_PATH, "format": "csv",
+                       "clusters_only": False, "since": None,
+                       "out": "export/output",
+                   })())))
+
 
     for i, (label, fn) in enumerate(steps, 1):
         console.rule(f"[cyan]Step {i}/{len(steps)}: {label}")
@@ -484,6 +497,61 @@ def cmd_pipeline(args):
     console.print("Network:   output/network.html")
     console.print("Exports:   export/output/")
     console.print("Alerts:    alerts/pending.json[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# CMD: cleanup (remove adults that slipped past age filters)
+# ---------------------------------------------------------------------------
+
+def cmd_cleanup(args):
+    console.rule("[bold cyan]CLEANUP — REMOVING ADULTS FROM DB")
+    from utils.helpers import is_minor
+    from datetime import date
+
+    db = _get_db()
+
+    # Records with explicit age >= 18
+    confirmed_adults = db.query(MissingPerson).filter(
+        MissingPerson.age_at_disappearance >= 18
+    ).all()
+
+    # Records where DOB tells us they were 18+ at disappearance
+    dob_adults = []
+    for r in db.query(MissingPerson).filter(
+        MissingPerson.age_at_disappearance == None,
+        MissingPerson.date_of_birth != None,
+    ).all():
+        if not is_minor(None, r.date_of_birth, r.date_missing):
+            dob_adults.append(r)
+
+    to_delete = confirmed_adults + dob_adults
+
+    console.print(f"  Records with age >= 18:          [red]{len(confirmed_adults):,}[/red]")
+    console.print(f"  Records where DOB indicates 18+: [red]{len(dob_adults):,}[/red]")
+    console.print(f"  Total to remove:                 [bold red]{len(to_delete):,}[/bold red]")
+
+    if not to_delete:
+        console.print("[green]✓ Nothing to delete — DB is clean.[/green]")
+        db.close()
+        return
+
+    if not getattr(args, "yes", False):
+        confirm = input(f"\nDelete {len(to_delete):,} adult records? [y/N] ").strip().lower()
+        if confirm != "y":
+            console.print("[yellow]Aborted.[/yellow]")
+            db.close()
+            return
+
+    for r in to_delete:
+        db.delete(r)
+    db.commit()
+
+    # Verify
+    remaining = db.query(MissingPerson).count()
+    db.close()
+
+    console.print(f"[green]✓ Deleted {len(to_delete):,} adult records.[/green]")
+    console.print(f"[green]  Remaining records: {remaining:,}[/green]")
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +628,8 @@ EXAMPLES:
   python main.py report
   python main.py export --format all
   python main.py le-report --cluster GARCIA
+  python main.py cleanup
+  python main.py cleanup --yes
   python main.py pipeline
   python main.py pipeline --skip-scrape
 
@@ -646,6 +716,12 @@ SCRAPER GROUPS:
     p_pip.add_argument("--skip-patterns",    action="store_true")
     p_pip.add_argument("--continue-on-error",action="store_true", default=True)
 
+    # cleanup
+    p_cln = sub.add_parser("cleanup",
+                            help="Remove adult records that slipped past age filters")
+    p_cln.add_argument("--yes", "-y", action="store_true",
+                       help="Skip confirmation prompt")
+
     args = parser.parse_args()
 
     # Attach db to args
@@ -665,6 +741,7 @@ SCRAPER GROUPS:
         "export":    cmd_export,
         "le-report": cmd_le_report,
         "pipeline":  cmd_pipeline,
+        "cleanup":   cmd_cleanup,
     }
 
     if args.command in dispatch:
