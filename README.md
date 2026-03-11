@@ -143,6 +143,7 @@ Statistical spike detection (z-score) per country per month highlights organised
 
 Corridor matches computed from Interpol nationality data vs country of disappearance, scored against UNODC/IOM/Europol documented trafficking routes. Flow matrix shows raw origin → destination pairs.
 
+![Trafficking corridors map](screenshots/corridors-map.png)
 ![Trafficking corridors](screenshots/corridors.png)
 
 ---
@@ -265,6 +266,8 @@ Five analytical engines run automatically after every scrape:
 - **CSV** — all active cases with cluster tags and enrichment findings (I/BASE compatible)
 - **XML** — i2 Analyst's Notebook compatible
 - **JSON-LD** — linked data format with schema.org vocabulary
+
+![Report template — PDF briefs](screenshots/report-pdf.png)
 
 ---
 
