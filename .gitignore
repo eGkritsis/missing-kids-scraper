@@ -11,3 +11,4 @@ missing_children.db
 /export
 missing_children.db
 *.txt
+/alerts/__pycache__
