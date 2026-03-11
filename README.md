@@ -64,7 +64,7 @@ Scrape all sources
 
 The pipeline ingests from all sources in parallel. Here, NamUs returns 10,000 records, Interpol fetches 2,400 child notices across 15 pages, GMCN processes 5,746 cases, and Missing People UK fetches 75 children concurrently via async.
 
-![Pipeline — NamUs + Interpol scraping](screenshots/1773189654820_Screenshot_from_2026-03-11_01-40-21.png)
+![Pipeline — NamUs + Interpol scraping](screenshots/Screenshot_from_2026-03-11_01-40-21.png)
 
 ---
 
