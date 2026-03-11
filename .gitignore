@@ -12,3 +12,4 @@ missing_children.db
 missing_children.db
 *.txt
 /alerts/__pycache__
+/__pycache__

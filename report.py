@@ -238,11 +238,14 @@ def collect_core(db):
 # HTML DASHBOARD
 # -----------------------------------------------------------------------
 
-def build_dashboard(core, patterns):
+def build_dashboard(core, patterns, network=None, pdf_reports=None, enrichment=None):
     country_coords_js = json.dumps(COUNTRY_COORDS)
     core_js           = json.dumps(core, default=str)
     patterns_js       = json.dumps(patterns, default=str) if patterns else "null"
     generated         = datetime.now().strftime("%Y-%m-%d %H:%M")
+    network_js        = json.dumps(network, default=str) if network else "null"
+    pdf_reports_js    = json.dumps(pdf_reports or [], default=str)
+    enrichment_js     = json.dumps(enrichment or {"total":0,"by_type":[]}, default=str)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -255,6 +258,7 @@ def build_dashboard(core, patterns):
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <style>
 :root {{
   --bg:      #07090f;
@@ -652,6 +656,8 @@ tr:hover td {{ background:var(--bg2); }}
     <button class="nav-btn" onclick="showPage('patterns')">Patterns</button>
     <button class="nav-btn" onclick="showPage('corridors')">Corridors</button>
     <button class="nav-btn" onclick="showPage('system')">System</button>
+    <button class="nav-btn" onclick="showPage('network')">Network</button>
+    <button class="nav-btn" onclick="showPage('reports')">Reports</button>
   </nav>
   <div class="gen-time">Generated: {generated}</div>
 </header>
@@ -807,6 +813,66 @@ tr:hover td {{ background:var(--bg2); }}
   </div>
 </div>
 
+<!-- ===== NETWORK PAGE ===== -->
+<div id="page-network" class="page">
+  <div class="section">
+    <div class="section-title">Network Graph</div>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;line-height:1.7;">
+      Interactive force-directed graph showing connections between missing children, family clusters,
+      burst locations, court cases, and trafficking corridors. Click nodes to open source. Drag to explore.
+    </p>
+    <div class="filter-bar">
+      <button class="map-btn active" onclick="netFilter('all',this)">All</button>
+      <button class="map-btn" onclick="netFilter('child',this)">Children</button>
+      <button class="map-btn" onclick="netFilter('cluster',this)">Clusters</button>
+      <button class="map-btn" onclick="netFilter('location_burst',this)">Bursts</button>
+      <button class="map-btn" onclick="netFilter('court_case,doj_case,europol_op,sanctions',this)">Legal</button>
+      <button class="map-btn" onclick="netFilter('country',this)">Corridors</button>
+      <input id="net-search" class="filter-bar input" placeholder="Search node..." oninput="netSearch(this.value)" style="width:200px;margin-left:auto">
+      <span id="net-stats" class="badge"></span>
+    </div>
+    <div id="net-container" style="height:600px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);position:relative;overflow:hidden;">
+      <div id="net-legend" style="position:absolute;bottom:16px;left:16px;z-index:10;background:rgba(14,18,32,.92);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">LEGEND</div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><div style="width:10px;height:10px;border-radius:50%;background:#e63946;flex-shrink:0"></div>Child</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><div style="width:10px;height:10px;border-radius:50%;background:#f4a261;flex-shrink:0"></div>Family Cluster</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><div style="width:10px;height:10px;border-radius:50%;background:#e9c46a;flex-shrink:0"></div>Burst Location</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><div style="width:10px;height:10px;border-radius:50%;background:#2a9d8f;flex-shrink:0"></div>Court / Legal</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><div style="width:10px;height:10px;border-radius:50%;background:#457b9d;flex-shrink:0"></div>Country / Corridor</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)"><div style="width:10px;height:10px;border-radius:50%;background:#9b5de5;flex-shrink:0"></div>DOJ / FBI</div>
+        </div>
+      </div>
+      <div id="net-tooltip" style="position:absolute;background:#0e1220;border:1px solid #1e2a3a;border-radius:8px;padding:12px 16px;pointer-events:none;display:none;max-width:280px;z-index:20;box-shadow:0 8px 32px rgba(0,0,0,.6);font-size:12px;"></div>
+      <svg id="net-svg" style="width:100%;height:100%;cursor:grab;"></svg>
+    </div>
+  </div>
+</div>
+
+<!-- ===== REPORTS PAGE ===== -->
+<div id="page-reports" class="page">
+  <div class="section">
+    <div class="section-title">OSINT Enrichment Summary</div>
+    <div id="enrichment-summary" style="margin-bottom:32px;"></div>
+  </div>
+  <div class="section">
+    <div class="section-title">Generated LE PDF Reports</div>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:20px;">
+      PDF briefs generated by <code style="color:var(--accent2)">python main.py le-report</code>.
+      Click to download. Generate more with <code style="color:var(--accent2)">python main.py le-report --all</code>
+    </p>
+    <div id="pdf-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;"></div>
+    <div id="pdf-empty" class="empty" style="display:none">
+      No PDF reports generated yet.<br>
+      Run: <code style="color:var(--accent2)">python main.py le-report --all</code>
+    </div>
+  </div>
+  <div class="section">
+    <div class="section-title">Export Files</div>
+    <div id="export-files" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;"></div>
+  </div>
+</div>
+
 <!-- ===== SYSTEM PAGE ===== -->
 <div id="page-system" class="page">
   <div class="section">
@@ -827,8 +893,11 @@ tr:hover td {{ background:var(--bg2); }}
 </div>
 
 <script>
-const CORE     = {core_js};
-const PATTERNS = {patterns_js};
+const CORE      = {core_js};
+const PATTERNS  = {patterns_js};
+const NETWORK   = {network_js};
+const PDF_REPORTS = {pdf_reports_js};
+const ENRICHMENT  = {enrichment_js};
 const COORDS   = {country_coords_js};
 
 // -----------------------------------------------------------------------
@@ -1308,6 +1377,243 @@ function renderCharts() {{
 }}
 
 // -----------------------------------------------------------------------
+// NETWORK GRAPH (embedded D3 force graph)
+// -----------------------------------------------------------------------
+const NET_TYPE_COLOR = {{
+  child:'#e63946', cluster:'#f4a261', location_burst:'#e9c46a',
+  court_case:'#2a9d8f', doj_case:'#9b5de5', fbi_wanted:'#9b5de5',
+  europol_op:'#2a9d8f', sanctions:'#ff6b6b', news:'#a8dadc',
+  country:'#457b9d', finding:'#6b7a99',
+}};
+const NET_RADIUS = {{
+  child:5, cluster:14, location_burst:18, court_case:10,
+  doj_case:10, fbi_wanted:10, europol_op:12, sanctions:12,
+  country:16, news:6, finding:7,
+}};
+
+let netSim, netFilter_current='all';
+
+function initNetwork() {{
+  if(!NETWORK) {{
+    document.getElementById('net-container').innerHTML =
+      '<div class="empty" style="padding-top:80px">Network graph not available.<br>Run: <code style="color:var(--accent2)">python main.py network</code></div>';
+    return;
+  }}
+
+  const container = document.getElementById('net-container');
+  const W = container.clientWidth || 900;
+  const H = container.clientHeight || 600;
+
+  renderNetwork('all');
+  document.getElementById('net-stats').textContent =
+    `${{NETWORK.nodes.length}} nodes · ${{NETWORK.edges.length}} edges`;
+}}
+
+function renderNetwork(filter) {{
+  netFilter_current = filter;
+  if(!NETWORK) return;
+
+  const svg = d3.select('#net-svg');
+  svg.selectAll('*').remove();
+
+  const W = document.getElementById('net-container').clientWidth || 900;
+  const H = document.getElementById('net-container').clientHeight || 600;
+
+  let nodes = NETWORK.nodes;
+  let edges = NETWORK.edges;
+
+  if(filter !== 'all') {{
+    const types   = filter.split(',');
+    const nodeSet = new Set(nodes.filter(n=>types.includes(n.type)).map(n=>n.id));
+    edges.forEach(e => {{
+      if(nodeSet.has(e.source)||nodeSet.has(e.target)) {{
+        nodeSet.add(typeof e.source==='object'?e.source.id:e.source);
+        nodeSet.add(typeof e.target==='object'?e.target.id:e.target);
+      }}
+    }});
+    nodes = nodes.filter(n=>nodeSet.has(n.id));
+    edges = edges.filter(e=>{{
+      const s = typeof e.source==='object'?e.source.id:e.source;
+      const t = typeof e.target==='object'?e.target.id:e.target;
+      return nodeSet.has(s)&&nodeSet.has(t);
+    }});
+  }}
+
+  // Cap for performance
+  const MAX_NODES = 600;
+  if(nodes.length > MAX_NODES) {{
+    // prioritise high-connection nodes
+    nodes = [...nodes].sort((a,b)=>(b.connections||0)-(a.connections||0)).slice(0,MAX_NODES);
+    const keep = new Set(nodes.map(n=>n.id));
+    edges = edges.filter(e=>{{
+      const s=typeof e.source==='object'?e.source.id:e.source;
+      const t=typeof e.target==='object'?e.target.id:e.target;
+      return keep.has(s)&&keep.has(t);
+    }});
+  }}
+
+  const g = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.05,5]).on('zoom',e=>g.attr('transform',e.transform)));
+
+  const links = edges.map(e=>({{...e}}));
+
+  if(netSim) netSim.stop();
+  netSim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d=>d.id)
+      .distance(d=>d.relation==='FAMILY_MEMBER'?60:d.relation==='BURST_LOCATION'?80:120)
+      .strength(0.4))
+    .force('charge', d3.forceManyBody().strength(-100))
+    .force('center', d3.forceCenter(W/2, H/2))
+    .force('collision', d3.forceCollide().radius(d=>(NET_RADIUS[d.type]||6)+4))
+    .alphaDecay(0.025);
+
+  const link = g.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke', d=>d.relation==='TRAFFICKING_FLOW'?'#f4a261':
+                       d.relation?.includes('COURT')||d.relation?.includes('DOJ')?'#2a9d8f':'#1e2a3a')
+    .attr('stroke-opacity',0.5)
+    .attr('stroke-width', d=>Math.min((d.weight||1)*0.6+0.5,4));
+
+  const node = g.append('g').selectAll('circle').data(nodes).join('circle')
+    .attr('r', d=>NET_RADIUS[d.type]||6)
+    .attr('fill', d=>NET_TYPE_COLOR[d.type]||'#6b7a99')
+    .attr('fill-opacity',0.85)
+    .attr('stroke','#07090f').attr('stroke-width',1.5)
+    .style('cursor','pointer')
+    .call(d3.drag()
+      .on('start',(e,d)=>{{if(!e.active)netSim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y;}})
+      .on('drag',(e,d)=>{{d.fx=e.x;d.fy=e.y;}})
+      .on('end',(e,d)=>{{if(!e.active)netSim.alphaTarget(0);d.fx=null;d.fy=null;}}))
+    .on('mouseover',(e,d)=>netShowTooltip(e,d))
+    .on('mouseout',()=>document.getElementById('net-tooltip').style.display='none')
+    .on('click',(e,d)=>{{if(d.meta?.url)window.open(d.meta.url,'_blank');}});
+
+  const label = g.append('g').selectAll('text')
+    .data(nodes.filter(n=>(NET_RADIUS[n.type]||6)>=12)).join('text')
+    .text(d=>d.label).attr('font-size',9).attr('fill','#6b7a99')
+    .attr('text-anchor','middle').attr('dy',d=>-(NET_RADIUS[d.type]||6)-4)
+    .style('pointer-events','none');
+
+  netSim.on('tick',()=>{{
+    link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+        .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('cx',d=>d.x).attr('cy',d=>d.y);
+    label.attr('x',d=>d.x).attr('y',d=>d.y);
+  }});
+
+  document.getElementById('net-stats').textContent=`${{nodes.length}} nodes · ${{links.length}} edges`;
+}}
+
+function netShowTooltip(e,d) {{
+  const m = d.meta||{{}};
+  let rows='';
+  if(m.age!=null)     rows+=`<div style="color:#6b7a99;margin:2px 0">Age: <span style="color:#e8edf5">${{m.age}}</span></div>`;
+  if(m.country)       rows+=`<div style="color:#6b7a99;margin:2px 0">Country: <span style="color:#e8edf5">${{m.country}}</span></div>`;
+  if(m.date)          rows+=`<div style="color:#6b7a99;margin:2px 0">Missing: <span style="color:#e8edf5">${{m.date}}</span></div>`;
+  if(m.count)         rows+=`<div style="color:#6b7a99;margin:2px 0">Cases: <span style="color:#e8edf5">${{m.count}}</span></div>`;
+  if(m.snippet)       rows+=`<div style="color:#6b7a99;font-size:10px;margin-top:6px">${{m.snippet.substring(0,100)}}...</div>`;
+  if(m.url)           rows+=`<div style="margin-top:8px"><a href="${{m.url}}" target="_blank" style="color:#e63946">↗ Source</a></div>`;
+  const tt=document.getElementById('net-tooltip');
+  tt.innerHTML=`<div style="font-size:13px;font-weight:700;margin-bottom:6px">${{d.label}}</div>
+    <div style="color:${{NET_TYPE_COLOR[d.type]||'#6b7a99'}};font-size:10px;margin-bottom:8px">${{d.type?.replace(/_/g,' ').toUpperCase()}}</div>${{rows}}`;
+  tt.style.display='block';
+  tt.style.left=(e.offsetX+16)+'px';
+  tt.style.top=(e.offsetY-10)+'px';
+}}
+
+function netFilter(type,btn) {{
+  document.querySelectorAll('#page-network .map-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  renderNetwork(type);
+}}
+
+function netSearch(q) {{
+  if(!NETWORK) return;
+  d3.select('#net-svg').selectAll('circle')
+    .attr('opacity',d=>!q||d.label?.toLowerCase().includes(q.toLowerCase())?1:0.08);
+}}
+
+// -----------------------------------------------------------------------
+// REPORTS TAB
+// -----------------------------------------------------------------------
+function renderReports() {{
+  // Enrichment summary
+  const enr = ENRICHMENT;
+  const enrEl = document.getElementById('enrichment-summary');
+  if(enr.total===0) {{
+    enrEl.innerHTML='<div class="empty">No enrichment findings yet.<br>Run: <code style="color:var(--accent2)">python main.py enrich</code></div>';
+  }} else {{
+    const typeRows = enr.by_type.map(t=>
+      `<div style="display:flex;align-items:center;gap:16px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="min-width:200px;font-family:var(--mono);font-size:11px;color:var(--muted)">${{t.type.replace(/_/g,' ')}}</div>
+        <div style="flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden">
+          <div style="height:100%;background:var(--accent2);border-radius:2px;width:${{Math.round(t.count/enr.by_type[0].count*100)}}%"></div>
+        </div>
+        <div style="font-family:var(--mono);font-size:13px;min-width:50px;text-align:right">${{t.count}}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);min-width:70px">avg ${{t.avg_score}}</div>
+      </div>`
+    ).join('');
+    enrEl.innerHTML=`
+      <div class="kpi-grid" style="margin-bottom:20px">
+        <div class="kpi"><div class="kpi-val">${{enr.total.toLocaleString()}}</div><div class="kpi-label">Total Findings</div></div>
+        <div class="kpi"><div class="kpi-val">${{enr.by_type.length}}</div><div class="kpi-label">Finding Types</div></div>
+      </div>
+      ${{typeRows}}`;
+  }}
+
+  // PDF reports grid
+  const pdfs = PDF_REPORTS;
+  const grid = document.getElementById('pdf-grid');
+  const empty = document.getElementById('pdf-empty');
+
+  if(!pdfs||pdfs.length===0) {{
+    grid.style.display='none';
+    empty.style.display='block';
+    return;
+  }}
+
+  empty.style.display='none';
+  grid.style.display='grid';
+
+  const typeIcon = {{cluster:'👨‍👩‍👧‍👦', burst:'📍', report:'📄'}};
+  const typeBadge = {{cluster:'orange', burst:'red', report:''}};
+
+  grid.innerHTML = pdfs.map(p=>
+    `<div class="p-card" style="cursor:default">
+      <div class="p-card-header">
+        <div>
+          <div class="p-card-title">${{typeIcon[p.type]||'📄'}} ${{p.filename.replace(/^(cluster_|burst_)/,'').replace('.pdf','')}}</div>
+          <div class="p-card-meta">${{p.modified}} · ${{p.size_kb}} KB</div>
+        </div>
+        <span class="badge ${{typeBadge[p.type]||''}}">${{p.type.toUpperCase()}}</span>
+      </div>
+      <a href="${{p.path}}" download="${{p.filename}}"
+         style="display:inline-block;margin-top:8px;font-family:var(--mono);font-size:11px;
+                color:var(--accent);text-decoration:none;padding:5px 12px;
+                border:1px solid var(--accent);border-radius:4px;">
+        ↓ Download PDF
+      </a>
+    </div>`
+  ).join('');
+
+  // Export files
+  const exportTypes = [
+    {{label:'CSV Export', cmd:'python main.py export --format csv', icon:'📊'}},
+    {{label:'XML (i2/I-BASE)', cmd:'python main.py export --format xml', icon:'🗂️'}},
+    {{label:'JSON-LD', cmd:'python main.py export --format json', icon:'🔗'}},
+    {{label:'All Formats', cmd:'python main.py export --format all', icon:'📦'}},
+  ];
+  document.getElementById('export-files').innerHTML = exportTypes.map(e=>
+    `<div class="p-card" style="cursor:default">
+      <div style="font-size:24px;margin-bottom:8px">${{e.icon}}</div>
+      <div class="p-card-title">${{e.label}}</div>
+      <div class="p-card-meta" style="margin-top:6px;font-size:11px">
+        <code style="color:var(--accent2)">${{e.cmd}}</code>
+      </div>
+    </div>`
+  ).join('');
+}}
+
+// -----------------------------------------------------------------------
 // BOOT
 // -----------------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {{
@@ -1321,6 +1627,8 @@ document.addEventListener('DOMContentLoaded', () => {{
   renderTargeting();
   renderCorridors();
   renderSystem();
+  initNetwork();
+  renderReports();
 }});
 </script>
 </body>
@@ -1331,6 +1639,70 @@ document.addEventListener('DOMContentLoaded', () => {{
 # -----------------------------------------------------------------------
 # ENTRY POINT
 # -----------------------------------------------------------------------
+
+def collect_network(db_path):
+    """Load network graph data from pre-built JSON or build on the fly."""
+    json_path = Path("analysis/output/network.json")
+    if json_path.exists():
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Try building it
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'analysis'))
+        from network import build_network
+        print("Building network graph...")
+        return build_network(db_path, min_connections=1)
+    except Exception as e:
+        print(f"Network unavailable: {e}")
+        return None
+
+
+def collect_pdf_reports():
+    """Scan export/output for generated PDF briefs."""
+    reports = []
+    export_dir = Path("export/output")
+    if not export_dir.exists():
+        return reports
+    for pdf in sorted(export_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
+        stat = pdf.stat()
+        reports.append({
+            "filename": pdf.name,
+            "path":     str(pdf),
+            "size_kb":  round(stat.st_size / 1024, 1),
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "type":     "cluster" if pdf.name.startswith("cluster_") else
+                        "burst"   if pdf.name.startswith("burst_")   else "report",
+        })
+    return reports
+
+
+def collect_enrichment_summary(db_path):
+    """Load enrichment findings summary."""
+    try:
+        from sqlalchemy import create_engine, text
+        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT finding_type, COUNT(*) as cnt,
+                       AVG(relevance_score) as avg_score
+                FROM enrichment_findings
+                GROUP BY finding_type
+                ORDER BY cnt DESC
+            """)).fetchall()
+            total = conn.execute(text(
+                "SELECT COUNT(*) FROM enrichment_findings"
+            )).scalar()
+        return {
+            "total": total or 0,
+            "by_type": [{"type": r[0], "count": r[1],
+                         "avg_score": round(r[2] or 0, 2)} for r in rows],
+        }
+    except Exception:
+        return {"total": 0, "by_type": []}
+
 
 def run_report(db_path=DB_PATH, skip_patterns=False, out_path=None):
     engine, Session = init_db(db_path)
@@ -1356,8 +1728,17 @@ def run_report(db_path=DB_PATH, skip_patterns=False, out_path=None):
         except Exception as e:
             print(f"Pattern analysis error: {e}")
 
+    print("Collecting network graph...")
+    network = collect_network(db_path)
+
+    print("Scanning PDF reports...")
+    pdf_reports = collect_pdf_reports()
+
+    print("Collecting enrichment summary...")
+    enrichment = collect_enrichment_summary(db_path)
+
     print("Building dashboard HTML...")
-    html = build_dashboard(core, patterns)
+    html = build_dashboard(core, patterns, network, pdf_reports, enrichment)
 
     out = out_path or "output/dashboard.html"
     Path(out).parent.mkdir(parents=True, exist_ok=True)

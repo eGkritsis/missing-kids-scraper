@@ -154,6 +154,34 @@ def cmd_run(args):
 
     db.close()
     console.rule(f"[bold green]Done — {total_new} new records")
+
+    # Auto-cleanup: remove any adults that slipped past age filters
+    console.rule("[dim]Auto-cleanup[/dim]")
+    try:
+        from utils.helpers import is_minor
+        db2 = _get_db()
+        confirmed_adults = db2.query(MissingPerson).filter(
+            MissingPerson.age_at_disappearance >= 18
+        ).all()
+        dob_adults = []
+        for r in db2.query(MissingPerson).filter(
+            MissingPerson.age_at_disappearance == None,
+            MissingPerson.date_of_birth != None,
+        ).all():
+            if not is_minor(None, r.date_of_birth, r.date_missing):
+                dob_adults.append(r)
+        to_delete = confirmed_adults + dob_adults
+        if to_delete:
+            for r in to_delete:
+                db2.delete(r)
+            db2.commit()
+            console.print(f"[dim]Cleanup: removed {len(to_delete):,} adult records.[/dim]")
+        else:
+            console.print("[dim]Cleanup: DB already clean.[/dim]")
+        db2.close()
+    except Exception as e:
+        logger.warning("Auto-cleanup error: %s", e)
+
     return results
 
 
@@ -456,8 +484,6 @@ def cmd_pipeline(args):
     if not skip_scrape:
         steps.append(("Scraping all sources",
                        lambda: cmd_run(type("A",(),{"scrapers":["all"]})())))
-        steps.append(("Cleanup adults from DB",
-                       lambda: cmd_cleanup(type("A",(),{"yes":True})())))
     steps.append(("Pattern analysis",
                    lambda: cmd_patterns(args)))
     steps.append(("OSINT enrichment (limit 500)",
