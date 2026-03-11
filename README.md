@@ -64,15 +64,15 @@ Scrape all sources
 
 The pipeline ingests from all sources in parallel. Here, NamUs returns 10,000 records, Interpol fetches 2,400 child notices across 15 pages, GMCN processes 5,746 cases, and Missing People UK fetches 75 children concurrently via async.
 
-![Pipeline — NamUs + Interpol scraping](screenshots/Screenshot_from_2026-03-11_01-40-21.png)
+![Pipeline — NamUs + Interpol scraping](screenshots/scraping1.png)
 
 ---
 
-![Pipeline — Interpol done, GMCN running](1773189654820_Screenshot_from_2026-03-11_01-40-39.png)
+![Pipeline — Interpol done, GMCN running](screenshots/scraping2.png)
 
 ---
 
-![Pipeline — GMCN done, Missing People UK async](1773189654821_Screenshot_from_2026-03-11_01-40-49.png)
+![Pipeline — GMCN done, Missing People UK async](screenshots/scraping3.png)
 
 ---
 
@@ -80,7 +80,7 @@ The pipeline ingests from all sources in parallel. Here, NamUs returns 10,000 re
 
 The news scraper runs 120+ feeds across 60+ countries. It cross-references article names against the DB in real time. When a resolution article is detected (`"Amber Alert canceled"`, `"found safe"`, etc.), the DB record is automatically marked as resolved.
 
-![News cross-reference and auto-resolution](1773189654821_Screenshot_from_2026-03-11_01-40-59.png)
+![News cross-reference and auto-resolution](screenshots/scraping4.png)
 
 ---
 
@@ -88,7 +88,7 @@ The news scraper runs 120+ feeds across 60+ countries. It cross-references artic
 
 After scraping, pattern analysis runs on 13,930 cases — finding 2,417 surname clusters (1,493 sibling units, 523 family groups, 401 cross-border), 239 spatio-temporal bursts (47 active), and 20 flagged countries. OSINT enrichment then queries CourtListener, DOJ, Europol, FBI, and Google News per case.
 
-![Pattern analysis results and OSINT enrichment starting](1773189654821_Screenshot_from_2026-03-11_01-41-16.png)
+![Pattern analysis results and OSINT enrichment starting](screenshots/pattern-osint.png)
 
 ---
 
@@ -96,7 +96,7 @@ After scraping, pattern analysis runs on 13,930 cases — finding 2,417 surname 
 
 Interpol Yellow Notices are fetched via the public `ws-public.interpol.int` API with `ageMax=17` server-side filtering. Each new child record is logged with age, nationality, and source.
 
-![Interpol new records with nationality](1773189654822_Screenshot_from_2026-03-11_01-56-46.png)
+![Interpol new records with nationality](screenshots/scraping5.png)
 
 ---
 
@@ -106,7 +106,7 @@ Interpol Yellow Notices are fetched via the public `ws-public.interpol.int` API 
 
 13,933 total cases. 47 active burst clusters. 1 active trafficking corridor. 20 countries with demographic flags. The map supports three modes: **Cases Count**, **Active Bursts**, and **Corridors**.
 
-![Dashboard overview — KPIs and world map](1773189654821_Screenshot_from_2026-03-11_01-43-02.png)
+![Dashboard overview — KPIs and world map](screenshots/dashboard1.png)
 
 ---
 
@@ -114,7 +114,7 @@ Interpol Yellow Notices are fetched via the public `ws-public.interpol.int` API 
 
 Cases by source, gender breakdown, age at disappearance, cases per year trend, missing duration distribution, and top countries — all rendered with Chart.js.
 
-![Dashboard analytics charts](1773189654821_Screenshot_from_2026-03-11_01-43-10.png)
+![Dashboard analytics charts](screenshots/dashboard2.png)
 
 ---
 
@@ -122,7 +122,7 @@ Cases by source, gender breakdown, age at disappearance, cases per year trend, m
 
 Filterable table with photo thumbnails, name, age, gender, city, country, date missing, and source. Filters by country, source, and age range. Paginated at 25 per page with direct links to original records.
 
-![Case explorer with photos and filters](1773189654821_Screenshot_from_2026-03-11_01-43-29.png)
+![Case explorer with photos and filters](screenshots/cases.png)
 
 ---
 
@@ -130,16 +130,9 @@ Filterable table with photo thumbnails, name, age, gender, city, country, date m
 
 2,417 clusters detected. Each card shows surname, countries, member count, age range, and date span. Click any card to expand and see individual children with photos and source links. Filterable by type (Sibling Unit / Family Group / Cross-Border).
 
-![Surname clusters — patterns tab](1773189654822_Screenshot_from_2026-03-11_01-44-12.png)
-
----
-
 ### Pattern Analysis — Timeline Anomalies & Demographic Targeting
 
 Statistical spike detection (z-score) per country per month highlights organised activity. Demographic targeting flags countries with abnormal age/gender distributions — Guatemala shows `PREDOMINANTLY_FEMALE + HIGH_PROPORTION_YOUNG_CHILDREN + VERY_YOUNG_MEAN_AGE (8.8)`, consistent with documented trafficking profiles.
-
-![Timeline anomalies](1773189654822_Screenshot_from_2026-03-11_01-44-19.png)  
-![Demographic targeting by country](1773189654822_Screenshot_from_2026-03-11_02-11-40.png)
 
 ---
 
@@ -147,7 +140,7 @@ Statistical spike detection (z-score) per country per month highlights organised
 
 Corridor matches computed from Interpol nationality data vs country of disappearance, scored against UNODC/IOM/Europol documented trafficking routes. Flow matrix shows raw origin → destination pairs.
 
-![Trafficking corridors](1773189654822_Screenshot_from_2026-03-11_01-44-12.png)
+![Trafficking corridors](screenshots/corridors.png)
 
 ---
 
@@ -155,7 +148,7 @@ Corridor matches computed from Interpol nationality data vs country of disappear
 
 Per-source breakdown with total, active, resolved, and photo counts. Scraper status cards show last run time, status, records found, new records, and errors.
 
-![System tab — scraper status](1773189654822_Screenshot_from_2026-03-11_01-44-19.png)
+![System tab — scraper status](screenshots/system.png)
 
 ---
 
@@ -163,7 +156,7 @@ Per-source breakdown with total, active, resolved, and photo counts. Scraper sta
 
 The embedded D3 force-directed network graph links 4,891 nodes and 3,844 edges. Nodes represent children, family clusters, burst locations, court cases, DOJ findings, and trafficking corridors. Filterable by type, searchable, zoomable, draggable.
 
-![Network graph — all nodes](1773189654823_Screenshot_from_2026-03-11_02-35-27.png)
+![Network graph — all nodes](screenshots/network-tab.png)
 
 ---
 
@@ -171,7 +164,7 @@ The embedded D3 force-directed network graph links 4,891 nodes and 3,844 edges. 
 
 Filtering to **Bursts** shows only spatio-temporal burst locations and the children connected to them. Here, Stronie Śląskie, Poland is shown as an active burst node with hovering over a child node showing age, country, date missing, and a direct source link.
 
-![Network graph — burst filter with tooltip](1773189654823_Screenshot_from_2026-03-11_02-36-02.png)
+![Network graph — burst filter with tooltip](screenshots/network-tab2.png)
 
 ---
 
@@ -179,7 +172,7 @@ Filtering to **Bursts** shows only spatio-temporal burst locations and the child
 
 PDF briefs generated per cluster are embedded as base64 in the dashboard for direct download without a server. Each brief contains: case summary, member table, analytical assessment, recommended investigative actions, and source links.
 
-![Reports tab — PDF briefs](1773189654823_Screenshot_from_2026-03-11_02-37-46.png)
+![Reports tab — PDF briefs](screenshots/reports-tab.png)
 
 ---
 
@@ -190,7 +183,6 @@ git clone https://github.com/YOUR_USERNAME/missing-kids-scraper
 cd missing-kids-scraper
 
 pip install -r requirements.txt
-pip install spacy pdfplumber reportlab Pillow rapidfuzz --break-system-packages
 python -m spacy download en_core_web_sm
 ```
 
@@ -286,74 +278,6 @@ Alert types:
 - `FLAGGED_SURNAME_MATCH` — new case matches a known high-priority cluster
 - `STATISTICAL_SPIKE` — z-score crossing threshold in real time
 - `HIGH_VALUE_FINDING` — court/DOJ/FBI match with relevance ≥ 0.6
-
-Notifications via **Telegram** and/or **email** (configure via environment variables).
-
-```bash
-export TELEGRAM_BOT_TOKEN="your_token"
-export TELEGRAM_CHAT_ID="your_chat_id"
-export SMTP_USER="you@gmail.com"
-export SMTP_PASS="app_password"
-export ALERT_EMAIL="recipient@domain.com"
-```
-
----
-
-## Project Structure
-
-```
-missing-kids-scraper/
-├── main.py                    # Single entry point — all commands
-├── report.py                  # HTML dashboard generator
-├── scrapers/
-│   ├── base.py
-│   ├── ncmec.py
-│   ├── namus.py
-│   ├── interpol.py
-│   ├── gmcn.py
-│   ├── missing_people_uk.py
-│   └── news.py
-├── analysis/
-│   ├── patterns.py            # Pattern analysis engine
-│   ├── enrichment.py          # OSINT enrichment pipeline
-│   ├── network.py             # Network graph builder
-│   ├── documents.py           # PDF document intelligence
-│   └── output/                # Generated reports (JSON, TXT)
-├── alerts/
-│   └── monitor.py             # Alert monitor daemon
-├── export/
-│   ├── le_report.py           # LE PDF brief generator
-│   ├── ibase.py               # I/BASE compatible export
-│   └── output/                # Generated exports
-├── database/
-│   └── models.py              # SQLAlchemy models
-├── utils/
-│   └── helpers.py
-└── output/
-    └── dashboard.html         # Self-contained HTML dashboard
-```
-
----
-
-## Requirements
-
-```
-python >= 3.12
-feedparser
-requests
-httpx
-beautifulsoup4
-sqlalchemy
-schedule
-rich
-tenacity
-rapidfuzz
-reportlab
-Pillow
-pdfplumber
-spacy (+ en_core_web_sm)
-playwright (optional, for JS-rendered sites)
-```
 
 ---
 
