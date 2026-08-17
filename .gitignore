@@ -16,3 +16,4 @@ missing_children.db
 alerts/pending.json
 *.json
 *.db
+missing_children.db
